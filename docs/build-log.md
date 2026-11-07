@@ -1,10 +1,10 @@
 # Resolvd Build Log
 
-## 2026-11-07 (Phase 0, steps 0.1 to 0.4)
+## 2026-11-07 (Phase 0, steps 0.1 to 0.6)
 
 **Did:**
 - Installed Node.js (with fnm), PostgreSQL with pgAdmin, the PostgreSQL VS Code extension and Bruno
-- Create a private `resolvd` repo on GitHub and connected to my `C:\Projects\resolvd` folder
+- Created a private `resolvd` repo on GitHub and connected to my `C:\Projects\resolvd` folder
 - Set Git's default branch to `main` and configured my name and email on this PC
 - Created the full project folder structure
 - Wrote `.gitignore`, a placeholder README and this build log
@@ -17,10 +17,13 @@
 **Learned:**
 - Terminals only read PATH when they open, so any PATH change will always need a fresh window
 - `.gitignore` rules are read top to bottom, so a `!` exception has to come after the rule it overrides
-- Test ignore rules with a dummy files and `git status` rather than just assuming they work
+- Test ignore rules with a dummy file and `git status` rather than just assuming they work
 
 **Concept check:**
-- (Asnwered at the end of Pahse 0)
+- What does `"type": "module"` change?
+    - It switches Node from CommonJS (`require`) to ES modules (`import`/`export`), the modern JavaScript standard, so relative imports need the .js extension
+- Why is `.env` ignored by Git but `.env.example` committed?
+    - In `.gitignore`, `.env` is specifically mentioned as a file to ignore, as well as `.env.*`. After those two lines `.env.example` is explicitly un-ignored. `.env` holds real secrets (database passwords, the JWT secret), and committing it to a public repo would expose them to anyone. `.env.example` has the same variable names with placeholder values, so anyone cloning the repo knows what to set up without seeing the actual secrets.
 
 **Next:**
 - Initialize the server package and install dependencies (0.5)
