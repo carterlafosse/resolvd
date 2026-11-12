@@ -1,0 +1,110 @@
+openapi: 3.0.3
+info:
+  title: Resolvd API
+  version: 0.1.0
+  description: |
+    Multi-organization IT helpdesk API. Each organization's data is isolated in every
+    query and again by PostgreSQL row-level security.
+
+    **Errors.** Every error response has the same shape (see the `Error` schema):
+    `{ "error": { "code", "message", "details"? } }`. Common codes:
+
+    | Status | Code | When |
+    | --- | --- | --- |
+    | 400 | `BAD_REQUEST` | Generic bad request |
+    | 400 | `INVALID_JSON` | The request body is not valid JSON |
+    | 400 | `VALIDATION_ERROR` | Input failed validation; `details` holds `formErrors` and `fieldErrors` |
+    | 400 | `INVALID_REFERENCE` | A referenced record doesn't exist |
+    | 400 | `INVALID_INPUT` | A value has the wrong format for the database |
+    | 401 | `UNAUTHORIZED` | Not signed in, or the session expired |
+    | 403 | `FORBIDDEN` | Signed in, but your role can't do this |
+    | 404 | `NOT_FOUND` | The route or record doesn't exist, or you can't see it |
+    | 409 | `CONFLICT` | Duplicate value, or the record changed since you loaded it |
+    | 413 | `PAYLOAD_TOO_LARGE` | The request body is over 100 KB |
+    | 415 | `UNSUPPORTED_MEDIA_TYPE` | Unsupported body charset or content encoding |
+    | 422 | `UNPROCESSABLE` | Valid input that breaks a business rule |
+    | 429 | `TOO_MANY_REQUESTS` | Rate limit reached (300 requests per minute per IP on `/api`) |
+    | 500 | `INTERNAL_ERROR` | Unexpected server error (no internals are returned) |
+    | 503 | `SERVICE_UNAVAILABLE` | A dependency is temporarily unavailable |
+
+    Every response carries an `X-Request-Id` header; quote it when reporting a problem.
+servers:
+  - url: /api
+tags:
+  - name: Health
+    description: Service status
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Check the API and database
+      description: Runs `SELECT 1` against the database. Used by Render's health check.
+      operationId: getHealth
+      responses:
+        '200':
+          description: The API is running and the database is reachable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                status: ok
+                database: up
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          description: The API is running but cannot reach the database.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+              example:
+                status: degraded
+                database: down
+components:
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Stable, machine-readable error code.
+              example: NOT_FOUND
+            message:
+              type: string
+              description: Human-readable explanation, safe to show to users.
+              example: 'Route not found: GET /api/nope'
+            details:
+              description: Extra information. For `VALIDATION_ERROR`, the flattened Zod error.
+              type: object
+              additionalProperties: true
+              example:
+                formErrors: []
+                fieldErrors:
+                  email: ['Invalid email address']
+    Health:
+      type: object
+      required: [status, database]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        database:
+          type: string
+          enum: [up, down]
+  responses:
+    TooManyRequests:
+      description: Rate limit reached.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error:
+              code: TOO_MANY_REQUESTS
+              message: Too many requests. Try again later.

@@ -7,8 +7,10 @@ import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { pinoHttp } from 'pino-http';
 import { env } from './config/env.js';
+import { docsRouter } from './docs.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFound } from './middleware/notFound.js';
+import { healthRouter } from './modules/health/health.routes.js';
 import { AppError } from './utils/AppError.js';
 import { logger } from './utils/logger.js';
 
@@ -18,6 +20,10 @@ export function createApp() {
   // One proxy (Render's load balancer) sits in front of the API in production. Trusting it
   // makes req.ip the real client IP (from X-Forwarded-For), which rate limiting depends on.
   app.set('trust proxy', 1);
+
+  // Mounted before helmet: helmet's default Content-Security-Policy blocks Swagger UI's
+  // scripts and styles, and the docs page holds no user data that needs those headers.
+  app.use('/api/docs', docsRouter);
 
   app.use(helmet());
   app.use(cors({ origin: env.CLIENT_ORIGIN, credentials: true }));
@@ -54,6 +60,8 @@ export function createApp() {
       handler: (req, res, next) => next(AppError.tooManyRequests()),
     }),
   );
+
+  app.use('/api/health', healthRouter);
 
   app.use(notFound);
   app.use(errorHandler);

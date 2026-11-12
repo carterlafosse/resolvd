@@ -21,3 +21,27 @@ Choices made while building Resolvd that the build plan (`RESOLVD_PLAN.md`) did 
 - **The seed hashes `SEED_PASSWORD` once and reuses the hash** for all 12 users. They all share the demo password anyway, and it saves 11 slow bcrypt runs every time tests reseed.
 - **The seed refuses to run when `NODE_ENV=production`,** because it truncates every organization.
 - **The seed inserts organizations directly** instead of calling `create_organization()`. It connects as the owner, so the SECURITY DEFINER function isn't needed.
+
+## Phase 2: Express server foundation
+
+- **Error handling matches ScreenGuide AI (Carter's instruction).** This replaces three details of the plan's 2.4, so the two codebases stay compatible:
+  - `AppError` has ten helpers, all with the signature `helper(message, details, code)` and a default message and code: `badRequest` (400 `BAD_REQUEST`), `unauthorized` (401 `UNAUTHORIZED`), `forbidden` (403 `FORBIDDEN`), `notFound` (404 `NOT_FOUND`), `conflict` (409 `CONFLICT`), `tooManyRequests` (429 `TOO_MANY_REQUESTS`), `validation` (400 `VALIDATION_ERROR`), `unprocessable` (422 `UNPROCESSABLE`), `internal` (500 `INTERNAL_ERROR`) and `serviceUnavailable` (503 `SERVICE_UNAVAILABLE`). The plan listed only the first six.
+  - `ZodError` details use Zod 4's `z.flattenError(err)` instead of the plan's `err.flatten()`, which Zod 4 deprecates. The output shape (`formErrors`, `fieldErrors`) is the same.
+  - body-parser errors are mapped: malformed JSON → 400 `INVALID_JSON`, body over 100 KB → 413 `PAYLOAD_TOO_LARGE`, unsupported charset or content encoding → 415 `UNSUPPORTED_MEDIA_TYPE`.
+  - The ScreenGuide AI repo isn't on this machine, so default messages and the codes for `validation` (400 rather than 422) and `unprocessable` (`UNPROCESSABLE`) were chosen here. Compare them with ScreenGuide's `AppError` and align whichever side differs.
+- **415 covers only what body-parser rejects.** `express.json()` raises 415 for an unsupported charset or encoding. A body sent with a non-JSON `Content-Type` (for example `text/plain`) is not parsed and `req.body` stays `undefined`, so from Phase 3 it fails validation with 400. Rejecting such requests with 415 would need a separate middleware; it wasn't added because the plan doesn't call for it.
+- **`AppError.internal()` messages are sent to the client.** Only *unrecognised* errors get the generic message. A deliberate `AppError` 500 has a message we wrote, so it's safe to show.
+- **Only 5xx errors are logged by the error handler.** 4xx responses are expected and already appear in the request log (as `warn`).
+- **The 404 message includes the method and path** (`Route not found: GET /api/x`) to make typos easier to spot. It echoes only what the client sent.
+- **The logger redacts `Cookie`, `Authorization` and `Set-Cookie` headers.** pino-http logs request headers by default, which would put session tokens in the logs from Phase 3 on.
+- **Log level is `info`** in development and production, and `silent` in tests.
+- **Pool `connectionTimeoutMillis: 5000`.** Without it, a request waits indefinitely for a connection when Postgres is unreachable. With it, `/api/health` returns its 503 quickly.
+- **The health module is a single routes file.** It has no business logic or tenant data, so a controller, service and queries file would be empty layers. The plan names only `health.routes.js`.
+- **Rate-limit 429s go through the error handler** (custom `handler`), so they use the standard error shape. Responses carry the standard `RateLimit` and `RateLimit-Policy` headers (draft 8), and no legacy `X-RateLimit-*` headers.
+- **pino-http logs 4xx as `warn` and 5xx as `error`** (`customLogLevel`), so problems stand out in the log.
+- **Graceful shutdown has a 10-second fallback** that forces an exit if open connections keep `server.close()` waiting. `app.listen` errors (such as the port already being in use) are logged and exit 1. Express 5 passes them to the listen callback.
+- **Minimal Phase 9.1 pulled forward.** `server/vitest.config.js` (node environment, `NODE_ENV=test`, no file parallelism, 15 s timeout) and `server/.env.test.example`. `globalSetup` (migrate + seed) is left for Phase 9 because Phase 2's tests need no tables.
+- **The `.env` loading in `src/config/env.js` duplicates `scripts/lib/loadEnv.js`** (two lines) instead of importing from `scripts/`, so the app's source doesn't depend on the CLI scripts folder.
+- **Extra tests beyond the plan's two:** AppError helpers, each error-handler mapping (including Express 5 forwarding async errors, which replaces the temporary test route; that route was also tried by hand and removed), and the `withOrg` / `withTransaction` behaviour.
+- **OpenAPI `servers` is `/api`**, so paths are written as `/health` and Swagger's "Try it out" calls the same host that serves the docs.
+- **`.gitignore` un-ignores `.env.test.example`.** The `.env.*` rule was also hiding the new placeholder file. Real `.env.test` files stay ignored.
