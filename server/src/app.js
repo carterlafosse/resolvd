@@ -10,6 +10,7 @@ import { env } from './config/env.js';
 import { docsRouter } from './docs.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { notFound } from './middleware/notFound.js';
+import { authRouter } from './modules/auth/auth.routes.js';
 import { healthRouter } from './modules/health/health.routes.js';
 import { AppError } from './utils/AppError.js';
 import { logger } from './utils/logger.js';
@@ -62,6 +63,7 @@ export function createApp() {
   );
 
   app.use('/api/health', healthRouter);
+  app.use('/api/auth', authRouter);
 
   app.use(notFound);
   app.use(errorHandler);
