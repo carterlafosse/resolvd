@@ -155,3 +155,35 @@
 
 **Next:**
 - Phase 5: workflow, assignment, comments and audit log (issue #7)
+
+## 2026-11-12 (Phase 5: workflow, assignment, comments and audit log)
+
+**Did:**
+- Claude Code built the status workflow, assignment and priority changes, comments with internal notes, first-response tracking, the event history and a combined activity feed (360 tests total)
+- Tested the full helpdesk flow in Bruno:
+    - As an end user (Erin), reported a VPN ticket
+    - As a technician (Taylor), assigned it to myself (it moved to in progress automatically) and added an internal note and a public reply
+    - As Erin, saw only the public reply. The internal note and the assignment event were hidden in both the comments and the activity feed
+    - Tried moving a new ticket straight from open to closed and got 400 `INVALID_TRANSITION`
+
+**Problems:**
+- One Create ticket request in Bruno said "request failed". The server log showed "request aborted": Bruno dropped the connection, not the server. The ticket was likely still created, leaving a duplicate after I retried. This is the retry problem that idempotency keys solve, which Phase 14 uses for the ScreenGuide integration
+- An end user can only see tickets they created, so for the comment test the end user had to create the ticket, not the technician
+
+**Learned:**
+- Switching accounts by changing the `email` variable in the Bruno environment keeps the request files untouched
+- Automatic status changes (assigning a ticket, or a requester replying to an on-hold one) are recorded under the person who caused them, so the audit trail always shows who was responsible
+- Gaps in ids (like event 5 missing from Erin's view) are a quick visual check that filtering is working
+
+**Concept checks:**
+- What does `SELECT ... FOR UPDATE` protect against?
+    - Two requests changing the same ticket at the same moment. Without it, both read the old status, both pass the workflow check, and the audit log records changes that don't line up. `FOR UPDATE` locks the row, so the second request waits for the first to commit and then sees the new status
+- Why filter internal notes in SQL rather than in JavaScript?
+    - If the query never returns the notes, they can't leak by mistake: a forgotten filter, a new endpoint, or a front-end bug can't expose data the server never sent. Filtering in JavaScript means the data is already loaded and one missed check exposes it
+- Why keep the workflow rules in pure functions?
+    - No database or Express is involved, so every combination of status and role can be tested in milliseconds (92 unit tests), and the rules live in one place. Changing a rule, like the 7-day reopen window, means changing one function
+- Why store names rather than ids in assignment events?
+    - The history reads clearly ("Unassigned → Taylor Tech") without looking anything up, and it stays accurate as a historical record even if that user is later renamed or deactivated
+
+**Next:**
+- Phase 6: SLAs and the breach-checking job (issue #8)
