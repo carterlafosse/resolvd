@@ -79,7 +79,8 @@ export const listTicketsQuery = z.object({
     .max(100)
     .transform((s) => s || undefined)
     .optional(),
-  // Accepted now; the SLA filters are applied from Phase 6, when tickets get deadlines.
+  // breached: a clock missed its deadline. at_risk: nothing breached, but a running clock has
+  // less than 25% of its window left. Each matches the ticket's sla.overall.
   sla: z.enum(['breached', 'at_risk']).optional(),
   // Only these names are accepted; the query maps each one to a fixed column.
   sort: z.enum(['created_at', 'updated_at', 'priority', 'resolution_due_at']).default('created_at'),

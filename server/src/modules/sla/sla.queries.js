@@ -19,3 +19,30 @@ export async function markSlaBreaches(db) {
   const { rows } = await db.query('SELECT ticket_id, org_id, clock FROM mark_sla_breaches()');
   return rows;
 }
+
+const POLICY_COLUMNS = 'priority, response_minutes, resolution_minutes, updated_at';
+
+// ticket_priority is an enum, so DESC sorts by severity: critical, high, medium, low.
+export async function listPolicies(client) {
+  const { rows } = await client.query(
+    `SELECT ${POLICY_COLUMNS} FROM sla_policies
+     WHERE organization_id = current_org_id()
+     ORDER BY priority DESC`,
+  );
+  return rows;
+}
+
+// An upsert, because PUT sets the policy whether or not the row exists. Every org gets all
+// four at sign-up, so in practice this updates; the insert path keeps PUT correct regardless.
+export async function upsertPolicy(client, priority, { responseMinutes, resolutionMinutes }) {
+  const { rows } = await client.query(
+    `INSERT INTO sla_policies (organization_id, priority, response_minutes, resolution_minutes)
+     VALUES (current_org_id(), $1, $2, $3)
+     ON CONFLICT (organization_id, priority) DO UPDATE
+       SET response_minutes = EXCLUDED.response_minutes,
+           resolution_minutes = EXCLUDED.resolution_minutes
+     RETURNING ${POLICY_COLUMNS}`,
+    [priority, responseMinutes, resolutionMinutes],
+  );
+  return rows[0];
+}

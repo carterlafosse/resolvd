@@ -1,4 +1,5 @@
 // SQL for tickets and their change events. Every function takes the client from withOrg.
+import { AT_RISK_SHARE } from '../sla/sla.js';
 
 // What a queue row needs. The joined names save the front end a lookup per row, and
 // display_id is built in SQL so every response formats it the same way.
@@ -233,6 +234,31 @@ const SORT_COLUMNS = {
 };
 const SORT_DIRECTIONS = { asc: 'ASC', desc: 'DESC' };
 
+// The SLA clocks in SQL, for the sla= list filters. These mirror clockState() in
+// sla/sla.js so the filter returns exactly the tickets whose sla.overall says the same thing;
+// a test checks that. `now` is a placeholder for the request's clock, which the service also
+// uses for each row's summary. A clock is "done" once its completing timestamp is set.
+function slaClockSql(now) {
+  const clocks = [
+    { due: 't.response_due_at', done: 't.first_response_at' },
+    { due: 't.resolution_due_at', done: 't.resolved_at' },
+  ];
+  // Completed after the deadline, or still running past it.
+  const breached = ({ due, done }) => `(${due} IS NOT NULL AND COALESCE(${done}, ${now}) > ${due})`;
+  // Still running, not past the deadline, and less than 25% of the window left.
+  const atRisk = ({ due, done }) =>
+    `(${due} IS NOT NULL AND ${done} IS NULL AND ${now} <= ${due}
+      AND ${due} - ${now} < (${due} - t.created_at) * ${AT_RISK_SHARE})`;
+
+  const anyBreached = `(${clocks.map(breached).join(' OR ')})`;
+  return {
+    breached: anyBreached,
+    // The overall state is the worse clock, so a ticket with one clock breached is breached,
+    // not at risk.
+    at_risk: `(NOT ${anyBreached} AND (${clocks.map(atRisk).join(' OR ')}))`,
+  };
+}
+
 // Builds the WHERE clause for the list from optional filters. Each value goes into the params
 // array and only its placeholder ($1, $2, ...) goes into the SQL text, so request data never
 // becomes SQL. The SQL fragments themselves are all fixed strings written here.
@@ -268,6 +294,13 @@ function buildTicketFilters(filters) {
         ? `(${titleMatch} OR t.ticket_number = ${param(filters.ticketNumber)})`
         : titleMatch,
     );
+  }
+  if (filters.sla) {
+    // One parameter for the clock, used in every comparison. The schema limits sla to the
+    // two keys of slaClockSql, and the lookup refuses anything else.
+    const condition = slaClockSql(`${param(filters.now)}::timestamptz`)[filters.sla];
+    if (!condition) throw new Error(`Unsupported SLA filter: ${filters.sla}`);
+    conditions.push(condition);
   }
 
   return { where: conditions.join('\n       AND '), params, param };

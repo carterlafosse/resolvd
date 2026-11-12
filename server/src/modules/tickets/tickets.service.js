@@ -426,8 +426,12 @@ export function getActivity(user, ticketId) {
 
 // GET /api/tickets: one page of the caller's queue, filtered, searched and sorted.
 export function listTickets(user, query) {
-  const { status, priority, assignee, categoryId, search, sort, order, page, pageSize } = query;
-  // query.sla is accepted by the schema but applied from Phase 6, when tickets get deadlines.
+  const { status, priority, assignee, categoryId, search, sla, sort, order, page, pageSize } =
+    query;
+
+  // One clock for the whole request: the sla filter and every row's sla summary are judged
+  // at the same moment, so a row can't be filtered as at_risk but summarised as breached.
+  const now = new Date();
 
   const filters = {
     requesterId: requesterIdFilter(user),
@@ -437,10 +441,9 @@ export function listTickets(user, query) {
     assigneeId: assignee === 'me' ? user.id : typeof assignee === 'number' ? assignee : null,
     categoryId,
     ...(search ? parseTicketSearch(search) : {}),
+    sla,
+    now,
   };
-
-  // One clock for the whole page, so every row's sla summary is judged at the same moment.
-  const now = new Date();
 
   return withOrg(user.orgId, async (client) => {
     const { rows, total } = await queries.listTickets(client, filters, {
