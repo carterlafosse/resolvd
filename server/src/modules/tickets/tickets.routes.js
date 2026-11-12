@@ -59,3 +59,7 @@ ticketsRouter.patch(
 );
 
 ticketsRouter.use('/:id/comments', commentsRouter);
+
+// Any signed-in user who can see the ticket; the service filters what end users see.
+ticketsRouter.get('/:id/events', validate({ params: ticketIdParams }), controller.listEvents);
+ticketsRouter.get('/:id/activity', validate({ params: ticketIdParams }), controller.activity);

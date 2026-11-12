@@ -27,6 +27,9 @@ import { canTransition, isStaff, statusChangeEffects } from './workflow.js';
 //   assignee event stores names ("Unassigned" for none). Assigning an open ticket moves it
 //   to in_progress and writes that status event too.
 // - Nothing about a closed ticket can change (400 TICKET_CLOSED).
+// - History: staff see every event; end users see only "created" and "status" events
+//   (PUBLIC_EVENT_FIELDS), filtered in SQL. The activity feed applies the same rule to events
+//   and hides internal notes from end users, like the comments endpoint.
 // - Every write locks the ticket row first (loadTicketForUpdate), so concurrent changes to one
 //   ticket run one after another and their events form one consistent history.
 
@@ -325,6 +328,30 @@ export function changePriority(user, ticketId, { priority }) {
     }
 
     return queries.findTicketById(client, ticketId);
+  });
+}
+
+// The only history end users see: when their ticket was created and how its status moved.
+// Assignment, priority and edits are the support team's working detail.
+export const PUBLIC_EVENT_FIELDS = ['created', 'status'];
+
+function historyVisibility(user) {
+  return { includeAll: isStaff(user), publicFields: PUBLIC_EVENT_FIELDS };
+}
+
+// GET /api/tickets/:id/events: newest first.
+export function listEvents(user, ticketId) {
+  return withOrg(user.orgId, async (client) => {
+    await loadTicketForRead(client, user, ticketId);
+    return { data: await queries.listEvents(client, ticketId, historyVisibility(user)) };
+  });
+}
+
+// GET /api/tickets/:id/activity: comments and events in one feed, oldest first.
+export function getActivity(user, ticketId) {
+  return withOrg(user.orgId, async (client) => {
+    await loadTicketForRead(client, user, ticketId);
+    return { data: await queries.listActivity(client, ticketId, historyVisibility(user)) };
   });
 }
 

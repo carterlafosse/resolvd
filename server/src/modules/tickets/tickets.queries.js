@@ -57,6 +57,64 @@ export async function insertEvent(client, { ticketId, actorId, field, oldValue, 
   );
 }
 
+// Joins an event to the person who made it. LEFT JOIN because actor_id is NULL for changes
+// the system made (for example the SLA job), shown as "System".
+const ACTOR_JOIN =
+  'LEFT JOIN users u ON u.organization_id = e.organization_id AND u.id = e.actor_id';
+
+// A ticket's change history, newest first. Unless includeAll is true (staff), only events
+// whose field is in publicFields are returned; the filter runs in SQL so hidden events never
+// leave the database. Events written in one transaction share created_at, so id breaks ties.
+export async function listEvents(client, ticketId, { includeAll, publicFields }) {
+  const { rows } = await client.query(
+    `SELECT e.id, e.ticket_id, e.actor_id, COALESCE(u.name, 'System') AS actor_name,
+            e.field, e.old_value, e.new_value, e.created_at
+     FROM ticket_events e
+     ${ACTOR_JOIN}
+     WHERE e.ticket_id = $1 AND e.organization_id = current_org_id()
+       AND ($2::boolean OR e.field = ANY($3::text[]))
+     ORDER BY e.created_at DESC, e.id DESC`,
+    [ticketId, includeAll, publicFields],
+  );
+  return rows;
+}
+
+// Comments and events merged into one feed, oldest first, in one shape:
+// type ('comment' | 'event'), id, actor_name, body, field, old_value, new_value, is_internal,
+// created_at. Columns that don't apply to a row type are NULL.
+// Visibility is the same as the comments and events endpoints: unless includeAll (staff),
+// internal notes and non-public events are filtered out here in SQL. An event's is_internal
+// says whether it's hidden from end users, so the front end can mark both kinds the same way.
+// Ties on created_at (a requester's reply and the status change it caused share one
+// transaction) sort comments before events ('comment' < 'event'), then by id.
+export async function listActivity(client, ticketId, { includeAll, publicFields }) {
+  const { rows } = await client.query(
+    `SELECT type, id, actor_name, body, field, old_value, new_value, is_internal, created_at
+     FROM (
+       SELECT 'comment' AS type, c.id, a.name AS actor_name, c.body,
+              NULL::varchar AS field, NULL::text AS old_value, NULL::text AS new_value,
+              c.is_internal, c.created_at
+       FROM ticket_comments c
+       JOIN users a ON a.organization_id = c.organization_id AND a.id = c.author_id
+       WHERE c.ticket_id = $1 AND c.organization_id = current_org_id()
+         AND ($2::boolean OR NOT c.is_internal)
+
+       UNION ALL
+
+       SELECT 'event', e.id, COALESCE(u.name, 'System'), NULL,
+              e.field, e.old_value, e.new_value,
+              NOT (e.field = ANY($3::text[])), e.created_at
+       FROM ticket_events e
+       ${ACTOR_JOIN}
+       WHERE e.ticket_id = $1 AND e.organization_id = current_org_id()
+         AND ($2::boolean OR e.field = ANY($3::text[]))
+     ) activity
+     ORDER BY created_at, type, id`,
+    [ticketId, includeAll, publicFields],
+  );
+  return rows;
+}
+
 // Null when the category doesn't exist in this org (including another org's category id).
 export async function findCategoryName(client, categoryId) {
   const { rows } = await client.query(

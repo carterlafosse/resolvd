@@ -32,3 +32,11 @@ export async function assignToMe(req, res) {
 export async function changePriority(req, res) {
   res.json(await ticketsService.changePriority(req.user, req.params.id, req.body));
 }
+
+export async function listEvents(req, res) {
+  res.json(await ticketsService.listEvents(req.user, req.params.id));
+}
+
+export async function activity(req, res) {
+  res.json(await ticketsService.getActivity(req.user, req.params.id));
+}
