@@ -334,3 +334,27 @@ describe('PATCH /api/users/me', () => {
     expect(res.status).toBe(401);
   });
 });
+
+describe('user id parameter', () => {
+  // ids are INT columns. A bigger number used to reach Postgres, fail with "value out of
+  // range" and come back as a 500; it's now a validation error.
+  it.each(['2147483648', '99999999999', '0', 'abc'])(
+    'rejects /api/users/%s with 400',
+    async (id) => {
+      const admin = await loginAs(USERS.acme.admin.email);
+
+      const res = await admin.patch(`/api/users/${id}`).send({ department: 'IT' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error.details.fieldErrors.id).toBeDefined();
+    },
+  );
+
+  it('accepts the largest INT and answers 404 when no such user exists', async () => {
+    const admin = await loginAs(USERS.acme.admin.email);
+
+    const res = await admin.patch('/api/users/2147483647').send({ department: 'IT' });
+
+    expect(res.status).toBe(404);
+  });
+});

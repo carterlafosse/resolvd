@@ -1,5 +1,6 @@
 // Zod schemas for the users endpoints (admin user management and a user's own account).
 import { z } from 'zod';
+import { idParams } from '../../utils/idSchemas.js';
 import { emailSchema, passwordSchema, personNameSchema } from '../auth/auth.schemas.js';
 
 const roleSchema = z.enum(['end_user', 'technician', 'admin']);
@@ -16,7 +17,7 @@ const atLeastOneField = [
   'Provide at least one field to update',
 ];
 
-export const userIdParams = z.object({ id: z.coerce.number().int().positive() });
+export const userIdParams = idParams;
 
 export const listUsersQuery = z.object({
   role: roleSchema.optional(),

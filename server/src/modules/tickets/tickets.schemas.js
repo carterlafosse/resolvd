@@ -1,14 +1,10 @@
 // Zod schemas for the tickets endpoints: create, update, the id parameter and the list query.
 import { z } from 'zod';
+import { idParam, idParams, idValue } from '../../utils/idSchemas.js';
 
 // Same order as the database enums (declaration order is what ORDER BY sorts by).
 export const TICKET_STATUSES = ['open', 'in_progress', 'on_hold', 'resolved', 'closed'];
 export const TICKET_PRIORITIES = ['low', 'medium', 'high', 'critical'];
-
-// Ids are PostgreSQL INT columns. Anything above the INT maximum would make Postgres raise
-// "value out of range" (a 500), so it's rejected here as a 400 instead.
-const PG_INT_MAX = 2147483647;
-const idSchema = z.coerce.number().int().positive().max(PG_INT_MAX);
 
 const statusSchema = z.enum(TICKET_STATUSES);
 const prioritySchema = z.enum(TICKET_PRIORITIES);
@@ -17,9 +13,9 @@ const prioritySchema = z.enum(TICKET_PRIORITIES);
 const titleSchema = z.string().trim().min(5).max(200);
 const descriptionSchema = z.string().trim().min(10).max(5000);
 // null means "no category" (clears it on update).
-const categoryIdSchema = z.number().int().positive().max(PG_INT_MAX).nullable();
+const categoryIdSchema = idValue.nullable();
 
-export const ticketIdParams = z.object({ id: idSchema });
+export const ticketIdParams = idParams;
 
 export const createTicketSchema = z.object({
   title: titleSchema,
@@ -64,9 +60,9 @@ export const listTicketsQuery = z.object({
   priority: commaList(prioritySchema).optional(),
   // "me", "unassigned", or a user id.
   assignee: z
-    .union([z.enum(['me', 'unassigned']), z.string().regex(/^\d+$/).pipe(idSchema)])
+    .union([z.enum(['me', 'unassigned']), z.string().regex(/^\d+$/).pipe(idParam)])
     .optional(),
-  categoryId: idSchema.optional(),
+  categoryId: idParam.optional(),
   // An empty search box sends "", which means no search.
   search: z
     .string()
