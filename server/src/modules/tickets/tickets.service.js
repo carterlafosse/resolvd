@@ -1,6 +1,7 @@
 // Tickets business rules: who can see, create and edit tickets, and the change history they leave.
 import { withOrg } from '../../db/withOrg.js';
 import { AppError } from '../../utils/AppError.js';
+import { buildPagination, toLimitOffset } from '../../utils/pagination.js';
 import { fieldError } from '../../utils/pgErrors.js';
 import * as queries from './tickets.queries.js';
 
@@ -96,5 +97,30 @@ export function createTicket(user, { title, description, priority, categoryId })
     });
 
     return queries.findTicketById(client, ticketId);
+  });
+}
+
+// GET /api/tickets: one page of the caller's queue, filtered, searched and sorted.
+export function listTickets(user, query) {
+  const { status, priority, assignee, categoryId, search, sort, order, page, pageSize } = query;
+  // query.sla is accepted by the schema but applied from Phase 6, when tickets get deadlines.
+
+  const filters = {
+    requesterId: requesterIdFilter(user),
+    statuses: status,
+    priorities: priority,
+    unassigned: assignee === 'unassigned',
+    assigneeId: assignee === 'me' ? user.id : typeof assignee === 'number' ? assignee : null,
+    categoryId,
+    ...(search ? parseTicketSearch(search) : {}),
+  };
+
+  return withOrg(user.orgId, async (client) => {
+    const { rows, total } = await queries.listTickets(client, filters, {
+      sort,
+      order,
+      ...toLimitOffset({ page, pageSize }),
+    });
+    return { data: rows, pagination: buildPagination({ page, pageSize, total }) };
   });
 }

@@ -1,15 +1,18 @@
 // SQL for tickets and their change events. Every function takes the client from withOrg.
 
-// The joined names save the front end a lookup per row. display_id is built in SQL so every
-// response formats it the same way.
-const TICKET_COLUMNS = `t.id, t.organization_id, t.ticket_number,
+// What a queue row needs. The joined names save the front end a lookup per row, and
+// display_id is built in SQL so every response formats it the same way.
+const SUMMARY_COLUMNS = `t.id, t.organization_id, t.ticket_number,
   'RES-' || t.ticket_number AS display_id,
-  t.title, t.description, t.status, t.priority,
+  t.title, t.status, t.priority,
   t.category_id, c.name AS category_name,
   t.requester_id, r.name AS requester_name,
   t.assignee_id, a.name AS assignee_name,
   t.response_due_at, t.resolution_due_at, t.first_response_at,
   t.resolved_at, t.closed_at, t.created_at, t.updated_at`;
+
+// A single ticket also carries its description (up to 5,000 characters, so lists leave it out).
+const TICKET_COLUMNS = `${SUMMARY_COLUMNS}, t.description`;
 
 // Joins match on organization_id as well as id, mirroring the composite foreign keys.
 // category and assignee are LEFT JOINs because both can be empty.
@@ -73,4 +76,90 @@ export async function findTicketById(client, id, { requesterId = null } = {}) {
     [id, requesterId],
   );
   return rows[0] ?? null;
+}
+
+// Sort names from the API -> SQL. Only these fixed strings can ever reach ORDER BY; the schema
+// already limits `sort` and `order` to these keys, and the lookup below refuses anything else.
+const SORT_COLUMNS = {
+  created_at: 't.created_at',
+  updated_at: 't.updated_at',
+  // ticket_priority is an enum, so it sorts in declaration order: low < medium < high < critical.
+  priority: 't.priority',
+  resolution_due_at: 't.resolution_due_at',
+};
+const SORT_DIRECTIONS = { asc: 'ASC', desc: 'DESC' };
+
+// Builds the WHERE clause for the list from optional filters. Each value goes into the params
+// array and only its placeholder ($1, $2, ...) goes into the SQL text, so request data never
+// becomes SQL. The SQL fragments themselves are all fixed strings written here.
+function buildTicketFilters(filters) {
+  const params = [];
+  const param = (value) => {
+    params.push(value);
+    return `$${params.length}`;
+  };
+
+  const conditions = ['t.organization_id = current_org_id()'];
+  if (filters.requesterId != null) {
+    conditions.push(`t.requester_id = ${param(filters.requesterId)}`);
+  }
+  if (filters.statuses) {
+    conditions.push(`t.status = ANY(${param(filters.statuses)}::ticket_status[])`);
+  }
+  if (filters.priorities) {
+    conditions.push(`t.priority = ANY(${param(filters.priorities)}::ticket_priority[])`);
+  }
+  if (filters.unassigned) {
+    conditions.push('t.assignee_id IS NULL');
+  } else if (filters.assigneeId != null) {
+    conditions.push(`t.assignee_id = ${param(filters.assigneeId)}`);
+  }
+  if (filters.categoryId != null) {
+    conditions.push(`t.category_id = ${param(filters.categoryId)}`);
+  }
+  if (filters.titlePattern) {
+    const titleMatch = `t.title ILIKE ${param(filters.titlePattern)}`;
+    conditions.push(
+      filters.ticketNumber != null
+        ? `(${titleMatch} OR t.ticket_number = ${param(filters.ticketNumber)})`
+        : titleMatch,
+    );
+  }
+
+  return { where: conditions.join('\n       AND '), params, param };
+}
+
+// One page of tickets plus the total number of matches.
+// COUNT(*) OVER() counts every row that matched the WHERE clause, before LIMIT/OFFSET cut it
+// down to one page, so the total comes back with the page in a single query.
+export async function listTickets(client, filters, { sort, order, limit, offset }) {
+  const sortColumn = SORT_COLUMNS[sort];
+  const direction = SORT_DIRECTIONS[order];
+  if (!sortColumn || !direction) throw new Error(`Unsupported ticket sort: ${sort} ${order}`);
+
+  const { where, params, param } = buildTicketFilters(filters);
+  const { rows } = await client.query(
+    `SELECT ${SUMMARY_COLUMNS}, COUNT(*) OVER()::int AS total_count
+     ${TICKET_JOINS}
+     WHERE ${where}
+     ORDER BY ${sortColumn} ${direction} NULLS LAST, t.id DESC
+     LIMIT ${param(limit)} OFFSET ${param(offset)}`,
+    params,
+  );
+
+  // A page past the end has no rows to carry total_count, so count separately (rare).
+  let total = rows[0]?.total_count ?? 0;
+  if (rows.length === 0 && offset > 0) total = await countTickets(client, filters);
+
+  // eslint-disable-next-line no-unused-vars -- total_count is dropped from each row
+  return { rows: rows.map(({ total_count, ...ticket }) => ticket), total };
+}
+
+async function countTickets(client, filters) {
+  const { where, params } = buildTicketFilters(filters);
+  const { rows } = await client.query(
+    `SELECT count(*)::int AS total FROM tickets t WHERE ${where}`,
+    params,
+  );
+  return rows[0].total;
 }
