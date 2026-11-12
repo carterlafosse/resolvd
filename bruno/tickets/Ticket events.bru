@@ -1,0 +1,15 @@
+meta {
+  name: Ticket events
+  type: http
+  seq: 9
+}
+
+get {
+  url: {{baseUrl}}/tickets/{{ticketId}}/events
+  body: none
+  auth: none
+}
+
+docs {
+  The change history, newest first. End users see only created and status events.
+}

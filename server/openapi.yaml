@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Resolvd API
-  version: 0.3.0
+  version: 0.4.0
   description: |
     Multi-organization IT helpdesk API. Each organization's data is isolated in every
     query and again by PostgreSQL row-level security.
@@ -20,6 +20,7 @@ info:
     | 400 | `CANNOT_CHANGE_SELF` | An admin tried to demote or deactivate themselves |
     | 400 | `LAST_ADMIN` | The change would leave the organization with no active admin |
     | 400 | `TICKET_CLOSED` | The ticket is closed and can't be changed |
+    | 400 | `INVALID_TRANSITION` | The status workflow doesn't allow this move; `message` says why |
     | 401 | `UNAUTHORIZED` | Not signed in, or the session expired |
     | 401 | `INVALID_CREDENTIALS` | Login: wrong email or password |
     | 401 | `ACCOUNT_LOCKED` | Login: too many failed attempts; try again in 15 minutes |
@@ -55,6 +56,10 @@ tags:
     description: |
       IT tickets. End users see only tickets they requested; technicians and admins see every
       ticket in their organization. A ticket you can't see is a 404, never a 403.
+  - name: Comments
+    description: |
+      Public replies and internal staff notes on a ticket. Visible to anyone who can see the
+      ticket, except internal notes, which only staff receive.
 paths:
   /auth/register-organization:
     post:
@@ -542,6 +547,266 @@ paths:
                 error:
                   code: CONFLICT
                   message: This ticket was changed by someone else. Reload and try again.
+  /tickets/{id}/status:
+    patch:
+      tags: [Tickets]
+      summary: Change a ticket's status
+      description: |
+        Follows the workflow. Staff may move a ticket:
+
+        | From | To |
+        | --- | --- |
+        | open | in_progress, on_hold, resolved |
+        | in_progress | on_hold, resolved, open |
+        | on_hold | in_progress, resolved |
+        | resolved | closed, open |
+        | closed | nothing (final) |
+
+        The requester may only answer a resolution: `closed` (confirming the fix) at any
+        time, or `open` (reopen) within 7 days of `resolved_at`. Any other move is 400
+        `INVALID_TRANSITION` with the reason in `message`.
+
+        Resolving sets `resolved_at`; reopening a resolved ticket clears it; closing sets
+        `closed_at`. Writes a `status` event.
+      operationId: changeTicketStatus
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { $ref: '#/components/schemas/TicketStatus' }
+      responses:
+        '200':
+          description: The updated ticket.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+        '400':
+          description: Invalid input, or the workflow doesn't allow this move (`INVALID_TRANSITION`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error:
+                  code: INVALID_TRANSITION
+                  message: "A ticket can't move from open to closed"
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tickets/{id}/assignment:
+    patch:
+      tags: [Tickets]
+      summary: Assign or unassign a ticket (staff)
+      description: |
+        The assignee must be an active technician or admin in your organization. Writes an
+        `assignee` event with the old and new **names** (`Unassigned` for none). Assigning an
+        `open` ticket also moves it to `in_progress` and writes that `status` event. Sending
+        the current assignee changes nothing.
+      operationId: assignTicket
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [assigneeId]
+              properties:
+                assigneeId:
+                  type: integer
+                  minimum: 1
+                  nullable: true
+                  description: '`null` unassigns.'
+      responses:
+        '200':
+          description: The updated ticket.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+        '400':
+          description: |
+            Invalid input; the user isn't an active technician or admin in your organization
+            (`VALIDATION_ERROR` with `fieldErrors.assigneeId`); or `TICKET_CLOSED`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tickets/{id}/assign-to-me:
+    post:
+      tags: [Tickets]
+      summary: Assign a ticket to yourself (staff)
+      description: Same as `PATCH /tickets/{id}/assignment` with your own user id.
+      operationId: assignTicketToMe
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: The updated ticket.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+        '400':
+          description: Invalid id, or `TICKET_CLOSED`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tickets/{id}/priority:
+    patch:
+      tags: [Tickets]
+      summary: Change a ticket's priority (staff)
+      description: Writes a `priority` event. Sending the current priority changes nothing.
+      operationId: changeTicketPriority
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [priority]
+              properties:
+                priority: { $ref: '#/components/schemas/TicketPriority' }
+      responses:
+        '200':
+          description: The updated ticket.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+        '400':
+          description: Invalid input, or `TICKET_CLOSED`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tickets/{id}/comments:
+    get:
+      tags: [Comments]
+      summary: List a ticket's comments
+      description: Oldest first. End users never receive internal notes.
+      operationId: listComments
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: The comments you can see.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Comment' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [Comments]
+      summary: Add a comment or internal note
+      description: |
+        - Only staff may post internal notes (`isInternal: true`); end users get 403.
+        - Closed tickets take no comments (400 `TICKET_CLOSED`).
+        - The first public comment by staff sets the ticket's `first_response_at`.
+        - A public reply from the requester on an `on_hold` ticket moves it to `in_progress`
+          and writes that `status` event.
+      operationId: createComment
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body]
+              properties:
+                body: { type: string, minLength: 1, maxLength: 5000, description: Trimmed. }
+                isInternal: { type: boolean, default: false }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Comment' }
+        '400':
+          description: Invalid input, or the ticket is closed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error:
+                  code: TICKET_CLOSED
+                  message: This ticket is closed. Please submit a new one.
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: An end user tried to post an internal note.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tickets/{id}/events:
+    get:
+      tags: [Tickets]
+      summary: A ticket's change history
+      description: |
+        Newest first. `actor_name` is `System` for changes no person made. Staff see every
+        event; end users see only `created` and `status` events.
+      operationId: listTicketEvents
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: The events you can see.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/TicketEvent' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tickets/{id}/activity:
+    get:
+      tags: [Tickets]
+      summary: A ticket's comments and events as one feed
+      description: |
+        Comments and events merged into one shape, oldest first. Same visibility as the
+        comments and events endpoints: end users see no internal notes and only `created` and
+        `status` events. When a comment and an event share a timestamp (a reply and the status
+        change it caused), the comment comes first.
+      operationId: getTicketActivity
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: The feed.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/ActivityItem' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
   /health:
     get:
       tags: [Health]
@@ -681,6 +946,47 @@ components:
         - type: object
           properties:
             description: { type: string }
+    Comment:
+      type: object
+      properties:
+        id: { type: integer }
+        ticket_id: { type: integer }
+        author_id: { type: integer }
+        author_name: { type: string }
+        author_role: { $ref: '#/components/schemas/Role' }
+        body: { type: string }
+        is_internal: { type: boolean, description: Internal notes are visible to staff only. }
+        created_at: { type: string, format: date-time }
+    TicketEvent:
+      type: object
+      description: One change to a ticket. Values are stored as text; people and categories by name.
+      properties:
+        id: { type: integer }
+        ticket_id: { type: integer }
+        actor_id: { type: integer, nullable: true, description: '`null` for system changes.' }
+        actor_name: { type: string, example: Tess Tech }
+        field:
+          type: string
+          description: What changed, for example `created`, `status`, `assignee`, `priority`, `title`, `category`.
+          example: status
+        old_value: { type: string, nullable: true, example: open }
+        new_value: { type: string, nullable: true, example: in_progress }
+        created_at: { type: string, format: date-time }
+    ActivityItem:
+      type: object
+      description: A comment or an event. Fields that don't apply to the type are `null`.
+      properties:
+        type: { type: string, enum: [comment, event] }
+        id: { type: integer, description: The comment's or event's id (unique per type). }
+        actor_name: { type: string }
+        body: { type: string, nullable: true, description: Comments only. }
+        field: { type: string, nullable: true, description: Events only. }
+        old_value: { type: string, nullable: true }
+        new_value: { type: string, nullable: true }
+        is_internal:
+          type: boolean
+          description: An internal note, or an event end users don't see. Always false for end users.
+        created_at: { type: string, format: date-time }
     Pagination:
       type: object
       properties:

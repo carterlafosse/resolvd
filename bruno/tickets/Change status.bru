@@ -1,0 +1,25 @@
+meta {
+  name: Change status
+  type: http
+  seq: 5
+}
+
+patch {
+  url: {{baseUrl}}/tickets/{{ticketId}}/status
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "status": "in_progress"
+  }
+}
+
+docs {
+  Statuses: open, in_progress, on_hold, resolved, closed.
+  Staff: open -> in_progress | on_hold | resolved; in_progress -> on_hold | resolved | open;
+  on_hold -> in_progress | resolved; resolved -> closed | open. Closed is final.
+  The requester may only close a resolved ticket, or reopen it within 7 days.
+  Anything else is 400 INVALID_TRANSITION with the reason, for example open -> closed.
+}

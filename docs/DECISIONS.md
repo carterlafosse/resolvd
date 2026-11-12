@@ -95,3 +95,28 @@ Carter's requests after checking ScreenGuide AI's conventions, made as a separat
 - **Tests use their own organizations.** `registerOrg()` in `tests/helpers.js` signs up a fresh org, so ticket numbers start at 1001 and filter results are exact. Until Phase 5 adds the status and assignment endpoints, tests set `status` and `assignee_id` through the owner connection.
 - **OpenAPI version bumped to 0.3.0**; Bruno environment gained `ticketId`.
 - **Follow-up (Carter's request): every id parameter is capped at the INT maximum.** `PATCH /api/users/99999999999` and `PATCH /api/categories/99999999999` returned 500 (Postgres "value out of range"); they now return 400 `VALIDATION_ERROR`. The rule lives in one shared file, `src/utils/idSchemas.js` (`idParam` for path and query text, `idValue` for JSON body numbers, `idParams` for `/:id`), used by the users, categories and tickets schemas, so a new module can't forget it. It's a new file the plan doesn't name; three copies of the same rule would drift.
+
+## Phase 5: Workflow, assignment, comments and audit log
+
+- **Moving to the same status is refused** (400 `INVALID_TRANSITION`, "The ticket is already on_hold"). The workflow table lists no self-moves, and refusing them means five identical requests sent at once produce exactly one status event. Phase 8's `allowedTransitions` will leave the current status out for the same reason.
+- **Every refused status move is 400 `INVALID_TRANSITION`,** including an end user trying a staff-only move. The plan says "400 with reason"; the message carries the reason ("Only support staff can change the status of this ticket", "Tickets can only be reopened within 7 days..."). 403 stays for whole endpoints that are staff only (assignment, priority) and for internal notes.
+- **The 7-day reopen window is inclusive**: exactly 7 days after `resolved_at` is still allowed, 1 ms later is not. A missing `resolved_at` is treated as outside the window. Closing (confirming the fix) has no time limit.
+- **`isStaff` and `STAFF_ROLES` moved to `workflow.js`** so the workflow module has no database imports. `tickets.service.js` re-exports `isStaff`, so existing imports keep working; the routes use `requireRole(...STAFF_ROLES)`.
+- **One clock per request.** The status service creates `now` once and uses it both for the 7-day check and for the `resolved_at` / `closed_at` it writes.
+- **Assignment details:**
+  - Body is `{ assigneeId }`, required, a user id or `null`. An assignee who isn't an active technician or admin in the org is 400 `VALIDATION_ERROR` with `fieldErrors.assigneeId` (like an unknown category), so a form can show it under the field.
+  - Sending the current assignee is not a change: no event, no status move, 200 with the ticket (same as unchanged fields in Phase 4).
+  - Unassigning never changes the status. Only assigning someone to an `open` ticket moves it to `in_progress`.
+  - The assignee row is read `FOR SHARE`, so it can't be deactivated or demoted until the assignment commits. No deadlock is possible with the user-admin rules: they never lock tickets.
+  - Resolved tickets can still be assigned and reprioritized; only closed ones can't (400 `TICKET_CLOSED`).
+- **`assertNotClosed(ticket, message)`** is shared by edit, assignment, priority and comments, each with its own message. Comments use the plan's "This ticket is closed. Please submit a new one."
+- **Automatic status moves are recorded as the person whose action caused them:** the assigner for open → in_progress, the requester for their reply on an on_hold ticket. `actor_id` NULL ("System") is kept for changes no person caused (Phase 6's SLA job). The requester reply rule applies only to public comments.
+- **Setting `first_response_at` writes no event.** The first public staff comment is itself the record, and it's already in the activity feed. Its value is the comment's `created_at`, so the two match exactly.
+- **Comments live in `modules/comments/`** (the folder Phase 0 created), with their own five files, mounted inside the tickets router at `/:id/comments` with `mergeParams`. They reuse the tickets module's `loadTicketForUpdate`, `assertNotClosed` and `writeStatusChange`. Events and activity stay in the tickets module because they're the ticket's history.
+- **Read-only endpoints don't lock.** Comments, events and activity lists check visibility with `loadTicketForRead` (a small `SELECT` without `FOR UPDATE`). Posting a comment locks, because it can change `first_response_at` or the status.
+- **Response shapes:** comments include `author_name` and `author_role`; events include `actor_id` and `actor_name`; lists are `{ data }` with no pagination (one ticket's conversation is small).
+- **Activity order:** oldest first; ties on `created_at` put comments before events, then sort by id. Events written in one transaction share a timestamp, so a reply appears before the status change it caused.
+- **`is_internal` on activity events** is true for events end users don't see (anything but `created` and `status`), so the front end can mark staff-only items the same way for comments and events. End users only ever receive `false`.
+- **Status and assignment endpoints return the full ticket**, like `PATCH /tickets/:id`, so the front end can update its cache from the response.
+- **Test helpers moved:** `setUpOrg`, `ticketBody`, `createTicket`, `setTicketColumns` and `eventsFor` moved from `tickets.test.js` to `tests/helpers.js`, because the new workflow and comments suites need them too.
+- **OpenAPI version 0.4.0**, with a new Comments tag and the `INVALID_TRANSITION` code. Bruno has a Comments folder and six new ticket requests; Assign ticket uses the existing `userId` variable.

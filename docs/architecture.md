@@ -17,7 +17,7 @@ Every request passes through this middleware, in order:
 5. `pino-http`: one log line per request, with a fresh UUID request id also returned in the `X-Request-Id` header. 4xx responses log as `warn`, 5xx as `error`.
 6. `express.json({ limit: '100kb' })` and `cookieParser()`.
 7. A general rate limit on `/api`: 300 requests per minute per IP.
-8. Routers: `/api/health`, `/api/auth`, `/api/users`, `/api/categories`, `/api/tickets`. Inside a router, protected routes run `authenticate`, then `requireRole(...)`, then `validate(...)`, then the controller.
+8. Routers: `/api/health`, `/api/auth`, `/api/users`, `/api/categories`, `/api/tickets` (which mounts the comments router at `/api/tickets/:id/comments`). Inside a router, protected routes run `authenticate`, then `requireRole(...)`, then `validate(...)`, then the controller.
 9. `notFound`, then `errorHandler`.
 
 Feature code follows route → controller → service → queries.
@@ -80,6 +80,45 @@ Anything thrown (or a rejected promise from an async handler, which Express 5 fo
 - With the lock, concurrent edits run one after another, and each sees the previous result. A test fires three edits at once and checks that each title event's old value is the previous event's new value.
 - Optimistic locking: the client may send `expectedUpdatedAt` (the `updated_at` it loaded). If the row has changed since, the API answers 409 instead of silently overwriting someone else's edit. The lock covers changes at the same instant; this covers someone editing a copy they loaded minutes ago.
 - Only fields whose value really changes are written. Each one gets a `ticket_events` row (old and new value as text, category by name) in the same transaction, so the history can't disagree with the ticket.
+
+### Workflow, assignment and comments
+
+**Status workflow** (`server/src/modules/tickets/workflow.js`). The rules are pure functions with no database code:
+- `canTransition({ ticket, to, user, now })` returns `{ ok, reason }`. `now` is passed in rather than read inside, so the 7-day reopen window is tested with a fixed clock.
+- `statusChangeEffects({ from, to, now })` says which timestamps a move sets: resolving sets `resolved_at`, reopening a resolved ticket clears it, closing sets `closed_at`.
+- Because they're pure, every row of the workflow table is unit tested in milliseconds, and Phase 8 can call `canTransition` for each status to tell the front end which buttons to show.
+
+| From | Staff may move to | The requester may move to |
+| --- | --- | --- |
+| open | in_progress, on_hold, resolved | (nothing) |
+| in_progress | on_hold, resolved, open | (nothing) |
+| on_hold | in_progress, resolved | (nothing) |
+| resolved | closed, open | closed (confirm the fix); open within 7 days of `resolved_at` |
+| closed | (final) | (final) |
+
+A refused move is 400 `INVALID_TRANSITION` with the reason as the message. The plan asks for 400 here (not 403) because the reason, not the role, is what the user needs to read: "Tickets can only be reopened within 7 days..." explains more than "Forbidden".
+
+**Every write follows the same steps** (status, assignment, priority, comments):
+1. `loadTicketForUpdate` locks the ticket row with `SELECT ... FOR UPDATE` and returns 404 unless the caller can see it.
+2. The rules are checked against that locked row.
+3. The change and its `ticket_events` rows are written in the same transaction.
+
+The lock is what keeps history consistent under concurrency. Two requests changing the same ticket queue up: the second waits for the first to commit, then reads the new status. Without it, both could read `in_progress`, both decide `resolved` is allowed, and the log would show two `in_progress -> resolved` events. The tests send the same move five times at once (exactly one succeeds, one event), and two competing moves (each event starts where the previous one ended, and the final status matches the last event).
+
+**Automatic status moves** reuse `writeStatusChange`, which writes the status and its event without checking who may make the move:
+- Assigning an `open` ticket moves it to `in_progress`, recorded as the person who assigned it.
+- A public reply from the requester on an `on_hold` ticket moves it to `in_progress`, recorded as the requester. On hold usually means "waiting for the requester", so their reply is how they ask for work to resume. They can't make that move through `PATCH /status`, because it's a staff move there.
+
+**Assignment.** Staff only (`requireRole`). The assignee must be an active technician or admin in the same org. The lookup uses `SELECT ... FOR SHARE` on that user, so an admin can't deactivate or demote them until the assignment commits. The `assignee` event stores **names**, not ids (`Unassigned` for none). The history can be shown without joining to `users`, and it records who the ticket went to as they were named at the time, even if the user is later renamed or deactivated. `ticket_events` also has a single `old_value`/`new_value` text pair for every kind of change, so a name fits the same shape as a status or priority.
+
+**Comments** (`server/src/modules/comments/`, mounted at `/api/tickets/:id/comments`):
+- Internal notes are staff-only. End users never receive them: the comments query has `AND ($2 OR NOT is_internal)`, so they're filtered in SQL. A JavaScript filter after the query could be forgotten on a new code path; a note that never leaves the database can't leak.
+- End users can't post internal notes (403). Nobody comments on a closed ticket (400): a problem that comes back gets a new ticket.
+- The first **public** staff comment sets `first_response_at` (Phase 6's response SLA). An internal note doesn't count, because the requester hasn't heard anything. The ticket row is locked while commenting, so two simultaneous replies can't both count as the first.
+
+**History endpoints.**
+- `GET /:id/events` lists the audit log newest first, with `actor_name` (`System` when `actor_id` is NULL). End users see only `created` and `status` events (`PUBLIC_EVENT_FIELDS`), filtered in SQL.
+- `GET /:id/activity` is the feed for the ticket page. One `UNION ALL` query merges comments and events into one shape (`type, id, actor_name, body, field, old_value, new_value, is_internal, created_at`), oldest first, with the same visibility filters. Events written in one transaction share a timestamp, so ties sort comments before events, then by id. A reply therefore appears before the status change it caused.
 
 ## Database
 

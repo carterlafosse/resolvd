@@ -1,0 +1,16 @@
+meta {
+  name: List comments
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/tickets/{{ticketId}}/comments
+  body: none
+  auth: none
+}
+
+docs {
+  Oldest first. Sign in as the requester (an end user) to check that internal notes
+  are not returned.
+}

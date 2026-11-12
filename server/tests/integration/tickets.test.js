@@ -2,62 +2,20 @@
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { USERS } from '../../db/seeds/users.js';
-import { app, closePools, createUser, loginAs, ownerPool, registerOrg } from '../helpers.js';
+import {
+  app,
+  closePools,
+  createTicket,
+  eventsFor,
+  loginAs,
+  ownerPool,
+  registerOrg,
+  setTicketColumns,
+  setUpOrg,
+  ticketBody,
+} from '../helpers.js';
 
 afterAll(closePools);
-
-// A fresh org with an admin, a technician and two end users, all signed in.
-async function setUpOrg() {
-  const { agent: admin, admin: adminUser, org } = await registerOrg();
-  const [techUser, aliceUser, bobUser] = await Promise.all([
-    createUser({ orgSlug: org.slug, role: 'technician', name: 'Tess Tech' }),
-    createUser({ orgSlug: org.slug, role: 'end_user', name: 'Alice User' }),
-    createUser({ orgSlug: org.slug, role: 'end_user', name: 'Bob User' }),
-  ]);
-  const [tech, alice, bob] = await Promise.all(
-    [techUser, aliceUser, bobUser].map((u) => loginAs(u.email, u.password)),
-  );
-  const categories = (await admin.get('/api/categories')).body.data;
-  const categoryId = (name) => categories.find((c) => c.name === name).id;
-  return { org, admin, adminUser, tech, techUser, alice, aliceUser, bob, bobUser, categoryId };
-}
-
-let counter = 0;
-function ticketBody(overrides = {}) {
-  counter += 1;
-  return {
-    title: `Test ticket ${counter}`,
-    description: 'Something is not working as expected.',
-    ...overrides,
-  };
-}
-
-async function createTicket(agent, overrides) {
-  const res = await agent.post('/api/tickets').send(ticketBody(overrides));
-  if (res.status !== 201) {
-    throw new Error(`createTicket failed: ${res.status} ${JSON.stringify(res.body)}`);
-  }
-  return res.body;
-}
-
-// Phase 5 adds the status and assignment endpoints; until then tests set these directly.
-async function setTicketColumns(ticketId, columns) {
-  const entries = Object.entries(columns);
-  const sets = entries.map(([column], i) => `${column} = $${i + 2}`).join(', ');
-  await ownerPool.query(`UPDATE tickets SET ${sets} WHERE id = $1`, [
-    ticketId,
-    ...entries.map(([, value]) => value),
-  ]);
-}
-
-async function eventsFor(ticketId) {
-  const { rows } = await ownerPool.query(
-    `SELECT actor_id, field, old_value, new_value FROM ticket_events
-     WHERE ticket_id = $1 ORDER BY id`,
-    [ticketId],
-  );
-  return rows;
-}
 
 describe('POST /api/tickets', () => {
   let ctx;

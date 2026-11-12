@@ -1,0 +1,23 @@
+meta {
+  name: Add comment
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/tickets/{{ticketId}}/comments
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "body": "Thanks, I have restarted the router. Please try again now.",
+    "isInternal": false
+  }
+}
+
+docs {
+  Set "isInternal": true for a staff-only note (end users get 403).
+  A closed ticket gives 400. The first public staff reply sets first_response_at.
+}

@@ -1,0 +1,16 @@
+meta {
+  name: Ticket activity
+  type: http
+  seq: 10
+}
+
+get {
+  url: {{baseUrl}}/tickets/{{ticketId}}/activity
+  body: none
+  auth: none
+}
+
+docs {
+  Comments and events in one feed, oldest first. End users see no internal notes
+  and only created and status events.
+}

@@ -1,0 +1,21 @@
+meta {
+  name: Change priority
+  type: http
+  seq: 8
+}
+
+patch {
+  url: {{baseUrl}}/tickets/{{ticketId}}/priority
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "priority": "high"
+  }
+}
+
+docs {
+  Staff only. low, medium, high or critical.
+}

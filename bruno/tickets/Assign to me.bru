@@ -1,0 +1,15 @@
+meta {
+  name: Assign to me
+  type: http
+  seq: 7
+}
+
+post {
+  url: {{baseUrl}}/tickets/{{ticketId}}/assign-to-me
+  body: none
+  auth: none
+}
+
+docs {
+  Staff only. Assigns the ticket to whoever is signed in.
+}

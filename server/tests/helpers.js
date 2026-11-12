@@ -101,3 +101,59 @@ export async function registerOrg() {
   }
   return { agent, admin: res.body.user, org: res.body.organization };
 }
+
+// ----- Ticket helpers (used by the ticket, workflow and comment suites) -----
+
+// A fresh org with an admin, a technician and two end users, all signed in.
+export async function setUpOrg() {
+  const { agent: admin, admin: adminUser, org } = await registerOrg();
+  const [techUser, aliceUser, bobUser] = await Promise.all([
+    createUser({ orgSlug: org.slug, role: 'technician', name: 'Tess Tech' }),
+    createUser({ orgSlug: org.slug, role: 'end_user', name: 'Alice User' }),
+    createUser({ orgSlug: org.slug, role: 'end_user', name: 'Bob User' }),
+  ]);
+  const [tech, alice, bob] = await Promise.all(
+    [techUser, aliceUser, bobUser].map((u) => loginAs(u.email, u.password)),
+  );
+  const categories = (await admin.get('/api/categories')).body.data;
+  const categoryId = (name) => categories.find((c) => c.name === name).id;
+  return { org, admin, adminUser, tech, techUser, alice, aliceUser, bob, bobUser, categoryId };
+}
+
+let counter = 0;
+export function ticketBody(overrides = {}) {
+  counter += 1;
+  return {
+    title: `Test ticket ${counter}`,
+    description: 'Something is not working as expected.',
+    ...overrides,
+  };
+}
+
+export async function createTicket(agent, overrides) {
+  const res = await agent.post('/api/tickets').send(ticketBody(overrides));
+  if (res.status !== 201) {
+    throw new Error(`createTicket failed: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  return res.body;
+}
+
+// Sets ticket columns directly (owner connection), for states the API would need many steps
+// to reach, such as a ticket resolved eight days ago or a deadline in the past.
+export async function setTicketColumns(ticketId, columns) {
+  const entries = Object.entries(columns);
+  const sets = entries.map(([column], i) => `${column} = $${i + 2}`).join(', ');
+  await ownerPool.query(`UPDATE tickets SET ${sets} WHERE id = $1`, [
+    ticketId,
+    ...entries.map(([, value]) => value),
+  ]);
+}
+
+export async function eventsFor(ticketId) {
+  const { rows } = await ownerPool.query(
+    `SELECT actor_id, field, old_value, new_value FROM ticket_events
+     WHERE ticket_id = $1 ORDER BY id`,
+    [ticketId],
+  );
+  return rows;
+}

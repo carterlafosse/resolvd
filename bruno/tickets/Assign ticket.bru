@@ -1,0 +1,23 @@
+meta {
+  name: Assign ticket
+  type: http
+  seq: 6
+}
+
+patch {
+  url: {{baseUrl}}/tickets/{{ticketId}}/assignment
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "assigneeId": {{userId}}
+  }
+}
+
+docs {
+  Staff only. Set userId to an active technician or admin (List users shows ids);
+  an end user or inactive account gives 400. Send "assigneeId": null to unassign.
+  Assigning an open ticket also moves it to in_progress.
+}
