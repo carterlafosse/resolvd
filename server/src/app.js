@@ -3,16 +3,15 @@ import { randomUUID } from 'node:crypto';
 import cookieParser from 'cookie-parser';
 import cors from 'cors';
 import express from 'express';
-import rateLimit from 'express-rate-limit';
 import helmet from 'helmet';
 import { pinoHttp } from 'pino-http';
 import { env } from './config/env.js';
 import { docsRouter } from './docs.js';
 import { errorHandler } from './middleware/errorHandler.js';
+import { createRateLimiter } from './middleware/rateLimit.js';
 import { notFound } from './middleware/notFound.js';
 import { authRouter } from './modules/auth/auth.routes.js';
 import { healthRouter } from './modules/health/health.routes.js';
-import { AppError } from './utils/AppError.js';
 import { logger } from './utils/logger.js';
 
 export function createApp() {
@@ -50,17 +49,7 @@ export function createApp() {
   app.use(express.json({ limit: '100kb' }));
   app.use(cookieParser());
 
-  app.use(
-    '/api',
-    rateLimit({
-      windowMs: 60 * 1000,
-      limit: 300,
-      standardHeaders: 'draft-8',
-      legacyHeaders: false,
-      // Send 429s through the error handler so they share the standard error shape.
-      handler: (req, res, next) => next(AppError.tooManyRequests()),
-    }),
-  );
+  app.use('/api', createRateLimiter({ windowMs: 60 * 1000, limit: 300 }));
 
   app.use('/api/health', healthRouter);
   app.use('/api/auth', authRouter);

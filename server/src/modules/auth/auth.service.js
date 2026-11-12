@@ -1,6 +1,8 @@
 // Auth business rules: organization sign-up, login with lockout, and loading the signed-in user.
+import { randomBytes } from 'node:crypto';
 import bcrypt from 'bcryptjs';
-import { setOrg, withTransaction } from '../../db/withOrg.js';
+import { pool } from '../../db/pool.js';
+import { setOrg, withOrg, withTransaction } from '../../db/withOrg.js';
 import { AppError } from '../../utils/AppError.js';
 import { fieldError, isUniqueViolation } from '../../utils/pgErrors.js';
 import { DEFAULT_CATEGORIES, DEFAULT_SLA_POLICIES } from '../organizations/defaults.js';
@@ -8,6 +10,19 @@ import * as usersQueries from '../users/users.queries.js';
 import * as queries from './auth.queries.js';
 
 export const BCRYPT_COST = 12;
+const MAX_FAILED_LOGINS = 5;
+const LOCK_MINUTES = 15;
+
+// A real bcrypt hash of a random value nobody knows, made once at startup. Comparing against
+// it when the email is unknown takes as long as checking a real password, so response time
+// doesn't reveal which emails have accounts. Generated, not hardcoded, so it can't match anything.
+const DUMMY_HASH = bcrypt.hashSync(randomBytes(32).toString('hex'), BCRYPT_COST);
+
+// One message for unknown email, inactive account and wrong password, so a response never
+// reveals whether an email is registered.
+function invalidCredentials() {
+  return AppError.unauthorized('Invalid email or password', undefined, 'INVALID_CREDENTIALS');
+}
 
 // Unique constraints sign-up can hit, mapped to messages the form can show under the field.
 export function emailTakenError() {
@@ -51,4 +66,37 @@ export async function registerOrganization({ organizationName, slug, name, email
     if (isUniqueViolation(err, 'organizations_slug_key')) throw slugTakenError();
     throw err;
   }
+}
+
+// POST /api/auth/login. Each failed check throws, so only a fully valid login reaches withOrg.
+export async function login({ email, password }) {
+  const account = await queries.findUserForLogin(pool, email);
+
+  if (!account || !account.is_active) {
+    // Still run bcrypt, so these fail in the same time as a wrong password.
+    await bcrypt.compare(password, account?.password_hash ?? DUMMY_HASH);
+    throw invalidCredentials();
+  }
+
+  // Checked before the password, so guesses made during the lock can't succeed.
+  if (account.locked_until && account.locked_until > new Date()) {
+    throw AppError.unauthorized(
+      'Account temporarily locked. Try again later.',
+      undefined,
+      'ACCOUNT_LOCKED',
+    );
+  }
+
+  if (!(await bcrypt.compare(password, account.password_hash))) {
+    // Must not run inside a transaction: throwing the 401 would roll the transaction back
+    // and the failed attempt would never be counted, so the lockout would never trigger.
+    await queries.recordLoginFailure(pool, account.id, MAX_FAILED_LOGINS, LOCK_MINUTES);
+    throw invalidCredentials();
+  }
+
+  return withOrg(account.organization_id, async (client) => {
+    const user = await queries.recordLoginSuccess(client, account.id);
+    const organization = await queries.findCurrentOrganization(client);
+    return { user, organization };
+  });
 }

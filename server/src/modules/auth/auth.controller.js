@@ -7,3 +7,9 @@ export async function registerOrganization(req, res) {
   setSessionCookie(res, result.user);
   res.status(201).json(result);
 }
+
+export async function login(req, res) {
+  const result = await authService.login(req.body);
+  setSessionCookie(res, result.user);
+  res.json(result);
+}

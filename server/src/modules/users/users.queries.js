@@ -1,7 +1,7 @@
 // SQL for the users table. Every function takes the client from withOrg, so RLS limits it to one org.
 
 // Everything about a user except password_hash, which never leaves the database layer.
-const USER_COLUMNS = `id, organization_id, name, email, role, department, is_active,
+export const USER_COLUMNS = `id, organization_id, name, email, role, department, is_active,
   email_notifications, locked_until, last_login_at, created_at, updated_at`;
 
 // organization_id comes from the transaction's org setting, never from request data.
