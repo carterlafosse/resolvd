@@ -200,3 +200,9 @@ Carter's requests after checking ScreenGuide AI's conventions, made as a separat
 - **Accessibility:** the icon-only buttons that existed already had labels; the queue's pagination arrows were the missing ones (`getControlProps`). Icons next to text are `aria-hidden`.
 - **The LoginPage inline style** (the cold-start note's icon alignment) moved to `LoginPage.module.css` as `.coldStartIcon`, per Carter's instruction. No inline `style` props remain in the client.
 - **Bundle size:** the build's single chunk is now about 235 kB gzipped (763 kB before compression), up from 175 kB in Phase 7. The 500 kB warning is still left for later, as decided in Phase 7.
+
+## Phase 9: Test infrastructure, isolation suite and CI
+
+- **Most of 9.1 already existed.** `vitest.config.js`, `.env.test.example`, `globalSetup.js` and `helpers.js` were pulled forward in Phases 2 and 3 (see above). This phase adds what was left.
+- **Tests only run against a database whose name ends in `_test`.** `globalSetup` checks `DATABASE_URL` and `MIGRATION_DATABASE_URL` before migrating and seeding. The seed truncates every table, so a `.env.test` copied from `.env` without changing the database name would otherwise wipe the development data. A missing URL names `.env.test.example` rather than the seed's generic "add it to server/.env" message.
+- **Coverage set up in the Vitest commit**, not the CI one, because it's Vitest configuration. `npm run test:coverage` prints a summary and writes an HTML report to `server/coverage/` (already ignored by Git). It covers `src/` and `scripts/lib/`. No threshold, as the plan says.
