@@ -1,6 +1,15 @@
 // Ticket endpoints: queue, detail, edits, workflow, comments and history.
 import { api } from './client.js';
 
+// TanStack Query keys. Everything about tickets starts with 'tickets', so after any change
+// invalidating ['tickets'] refreshes the queue, the open ticket and its activity together.
+export const ticketKeys = {
+  all: ['tickets'],
+  list: (filters) => ['tickets', 'list', filters],
+  detail: (id) => ['tickets', 'detail', String(id)],
+  activity: (id) => ['tickets', 'detail', String(id), 'activity'],
+};
+
 // filters: status, priority, assignee, categoryId, search, sla, sort, order, page, pageSize.
 export const listTickets = (filters, { signal } = {}) =>
   api('/tickets', { query: filters, signal });

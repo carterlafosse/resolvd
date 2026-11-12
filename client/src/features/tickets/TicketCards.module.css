@@ -1,0 +1,10 @@
+/* Styles for the ticket cards: a card is a link, so it keeps the text colour and shows hover. */
+
+.ticketCard {
+  color: inherit;
+  text-decoration: none;
+
+  @mixin hover {
+    background-color: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-6));
+  }
+}

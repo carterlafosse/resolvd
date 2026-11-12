@@ -31,7 +31,8 @@ describe('route guards', () => {
   it('hides the admin section from technicians', async () => {
     vi.stubGlobal('fetch', vi.fn(mockSession(sessionFor('technician'))));
     renderWithProviders(<App />, { route: '/tickets' });
-    expect(await screen.findByRole('link', { name: 'New ticket' })).toBeTruthy();
+    // The navbar and the queue's header both link to New ticket.
+    expect((await screen.findAllByRole('link', { name: 'New ticket' })).length).toBeGreaterThan(0);
     expect(screen.queryByRole('link', { name: 'Users' })).toBeNull();
   });
 

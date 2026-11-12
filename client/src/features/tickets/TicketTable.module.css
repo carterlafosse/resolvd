@@ -1,0 +1,17 @@
+/* Styles for the ticket table: clickable rows, a width limit for titles, and sort buttons. */
+
+.row {
+  cursor: pointer;
+}
+
+.titleCell {
+  max-width: 320px;
+}
+
+.sortButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 700;
+  font-size: var(--mantine-font-size-sm);
+}

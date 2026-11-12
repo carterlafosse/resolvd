@@ -1,0 +1,14 @@
+/* Styles for the ticket queue's filter bar: the search box grows, the selects keep a usable width. */
+
+.filterBar {
+  row-gap: var(--mantine-spacing-xs);
+}
+
+.searchInput {
+  flex: 1 1 240px;
+}
+
+.filterSelect {
+  flex: 0 1 220px;
+  min-width: 160px;
+}
