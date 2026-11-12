@@ -46,7 +46,7 @@ Anything thrown (or a rejected promise from an async handler, which Express 5 fo
 | Postgres `23505` / `23503` / `22P02` | 409 `CONFLICT` / 400 `INVALID_REFERENCE` / 400 `INVALID_INPUT` |
 | anything else | 500 `INTERNAL_ERROR` with a generic message |
 
-`AppError` has helpers with the signature `helper(message, details, code)`: `badRequest`, `unauthorized`, `forbidden`, `notFound`, `conflict`, `tooManyRequests`, `validation`, `unprocessable`, `internal`, `serviceUnavailable`. These match ScreenGuide AI so the two projects can share error handling. Only 5xx errors are logged, with the full error and the request id; the client never sees stack traces, SQL or connection details.
+`AppError` has helpers with the signature `helper(message, details, code)`: `badRequest`, `unauthorized`, `forbidden`, `notFound`, `conflict`, `tooManyRequests`, `validation`, `unprocessable`, `internal`, `serviceUnavailable`. They are meant to line up with ScreenGuide AI so the two projects can share error handling; that hasn't been confirmed against ScreenGuide's own `AppError` yet (see `docs/DECISIONS.md`). Only 5xx errors are logged, with the full error and the request id; the client never sees stack traces, SQL or connection details.
 
 ### Health
 
@@ -78,7 +78,7 @@ Row-level security doesn't apply to a table's owner, so if the API connected as 
 
 ### Row-level security
 
-Every tenant table has a policy named `org_isolation`: `organization_id = current_org_id()`, used both to filter rows (`USING`) and to check writes (`WITH CHECK`). `current_org_id()` reads the `app.current_org_id` setting, which the API's `withOrg()` helper sets with `set_config(..., true)` at the start of each transaction. The `true` makes it transaction-local, so it can't leak to the next request that reuses the pooled connection.
+Every tenant table has a policy named `org_isolation`: `organization_id = current_org_id()`, used both to filter rows (`USING`) and to check writes (`WITH CHECK`). `current_org_id()` reads the `app.current_org_id` setting, which the API's `withOrg()` helper sets with `set_config(..., true)` at the start of each transaction. The `true` makes it transaction-local, so it can't leak to the next request that reuses the pooled connection. `setOrg` refuses anything but a positive integer and throws before querying, so a bug can never run a transaction with a missing or malformed org.
 
 If the setting is missing, `current_org_id()` is NULL, `organization_id = NULL` is never true, and **no rows are visible**. Forgetting to set the org fails closed, not open. `organizations` has its own policy, `org_self` (`id = current_org_id()`), so an org can only see its own row. `docs/rls-demo.sql` demonstrates all of this.
 
@@ -135,6 +135,8 @@ The role is never read from the token. Demoting or deactivating someone therefor
 Two limits work together:
 - The **per-account lockout** stops many IPs guessing one account.
 - The **per-IP login rate limit** (10 attempts per 15 minutes) stops one IP guessing across many accounts.
+
+Sign-up has its own per-IP limit of 5 attempts per hour (rejected ones count too), because each real sign-up creates an organization and runs bcrypt.
 
 ### Passwords
 
