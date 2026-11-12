@@ -1,0 +1,9 @@
+/* Styles for an SLA policy row: fixed widths so the amount and unit inputs line up across rows. */
+
+.amountInput {
+  width: 150px;
+}
+
+.unitSelect {
+  width: 100px;
+}

@@ -1,0 +1,5 @@
+/* Styles for the SLA policies page: keep the rows at a readable width. */
+
+.content {
+  max-width: 820px;
+}

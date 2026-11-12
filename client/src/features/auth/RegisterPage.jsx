@@ -8,6 +8,7 @@ import { Link, Navigate } from 'react-router-dom';
 import { registerOrganization } from '../../api/auth.js';
 import { startSession, useAuth } from '../../auth/useAuth.js';
 import { AuthShell } from './AuthShell.jsx';
+import { validateEmail, validatePassword } from './passwordRules.js';
 import { SLUG_PATTERN, slugify } from './slug.js';
 
 // The same limits as the API's registerOrgSchema. Checking here first matters because the API
@@ -18,14 +19,8 @@ const validate = {
   slug: (value) =>
     SLUG_PATTERN.test(value) ? null : 'Use 3 to 50 lowercase letters, numbers or hyphens',
   name: (value) => (value.trim() && value.trim().length <= 100 ? null : 'Enter your name'),
-  email: (value) => (/^\S+@\S+\.\S+$/.test(value.trim()) ? null : 'Enter a valid email'),
-  password: (value) => {
-    if (value.length < 10) return 'Password must be at least 10 characters';
-    if (value.length > 72) return 'Password must be at most 72 characters';
-    if (!/[A-Za-z]/.test(value)) return 'Password must contain a letter';
-    if (!/[0-9]/.test(value)) return 'Password must contain a number';
-    return null;
-  },
+  email: validateEmail,
+  password: validatePassword,
   confirmPassword: (value, values) => (value === values.password ? null : 'Passwords do not match'),
 };
 

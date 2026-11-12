@@ -1,0 +1,14 @@
+/* Styles for a category row: even spacing with a divider, and a rename input that fills the row. */
+
+.categoryRow {
+  padding: var(--mantine-spacing-xs) var(--mantine-spacing-md);
+  border-bottom: 1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-4));
+
+  &:last-child {
+    border-bottom: 0;
+  }
+}
+
+.nameInput {
+  flex: 1;
+}

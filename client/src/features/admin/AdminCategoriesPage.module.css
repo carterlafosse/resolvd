@@ -1,0 +1,9 @@
+/* Styles for the categories page: a comfortable width, and an add input that fills its row. */
+
+.content {
+  max-width: 640px;
+}
+
+.addInput {
+  flex: 1;
+}
