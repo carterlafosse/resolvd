@@ -248,3 +248,39 @@
 
 **Next:**
 - Phase 8: ticket pages and admin screens (issue #10)
+
+## 2026-11-12 (Phase 8: ticket pages and admin screens)
+
+**Did:**
+- Claude Code built the real helpdesk screens:
+    - a ticket queue with role-based tabs, filters in the URL, search, sortable columns, pagination, and a card layout on phones
+    - a new ticket form with priority help text (critical only for staff)
+    - a ticket page with an activity feed, inline editing, status, priority and assignee controls, and both SLA clocks
+    - admin pages for users, categories and SLA policies
+    - 426 server and 74 client tests
+- Saw the app as real web pages for the first time and walked the full flow:
+    - as Erin (end user), submitted RES-1009 "Outlook can't sign in"
+    - as Taylor (technician), found it under Unassigned, assigned it to myself, added an internal note and a public reply, and resolved it
+    - as Erin, saw the reply but not the note, and clicked "Yes, it's fixed"
+    - as an admin, added a technician, edited an SLA policy and renamed a category
+- Signed in as Acme and Globex admins side by side (one window in Incognito), and neither saw the other's data
+- Took the main screenshots in light mode, plus dark mode and phone width, using Chrome's Capture screenshot so they show just the page
+
+**Problems:**
+- None in the app. I retook the Phase 7 sign-in screenshot in light mode so all the README screenshots match
+
+**Learned:**
+- The page uses `allowedTransitions` and `canEdit` from the API to decide which buttons to show, so an end user on an open ticket sees Edit but no status control
+- Incognito windows have separate cookies, which makes testing two accounts at once easy
+- Chrome dev tools can take clean screenshots of just the page, including at phone sizes
+
+**Concept checks:**
+- Why do filters live in the URL?
+    - A filtered view can be bookmarked, shared or refreshed without losing it, and the back button works between filter changes. It also means there's one source of truth for what the page is showing
+- Why does the API send `allowedTransitions` instead of the front end working them out?
+    - The server already has the workflow rules, so it stays the single source of truth. If the front end copied them, the two could drift apart and show buttons that the API would then refuse. The UI just reflects what the server will allow
+- What does `invalidateQueries` do after a mutation?
+    - It marks the cached data for those queries as out of date, so TanStack Query refetches it. After I resolved the ticket, the ticket page and the queue both refreshed to show the new status without reloading the page
+
+**Next:**
+- Phase 9: test infrastructure, isolation suite and CI (issue #11)
