@@ -17,7 +17,7 @@ Every request passes through this middleware, in order:
 5. `pino-http`: one log line per request, with a fresh UUID request id also returned in the `X-Request-Id` header. 4xx responses log as `warn`, 5xx as `error`.
 6. `express.json({ limit: '100kb' })` and `cookieParser()`.
 7. A general rate limit on `/api`: 300 requests per minute per IP.
-8. Routers: `/api/health`, `/api/auth`, `/api/users`, `/api/categories`. Inside a router, protected routes run `authenticate`, then `requireRole(...)`, then `validate(...)`, then the controller.
+8. Routers: `/api/health`, `/api/auth`, `/api/users`, `/api/categories`, `/api/tickets`. Inside a router, protected routes run `authenticate`, then `requireRole(...)`, then `validate(...)`, then the controller.
 9. `notFound`, then `errorHandler`.
 
 Feature code follows route → controller → service → queries.
@@ -27,7 +27,7 @@ Feature code follows route → controller → service → queries.
 - **Controllers** only read the request, call one service function and send the response.
 - **Services** hold the rules (each service file lists them at the top) and open `withOrg`.
 - **Queries** are plain SQL functions that take `client` first. Every query filters on `organization_id = current_org_id()`, and inserts set `organization_id = current_org_id()` in SQL, so the org always comes from the transaction's setting and never from request data.
-- **Responses:** lists are `{ data: [...] }`; single records are the record itself; auth endpoints return `{ user, organization }`. Fields are snake_case as stored; request bodies are camelCase. Services open `withOrg(orgId, work)` from `server/src/db/withOrg.js`: one transaction on one pooled connection, with `app.current_org_id` set transaction-locally. Every tenant query inside uses the `client` it's handed, because `pool.query` would run on another connection with no org set and RLS would hide every row.
+- **Responses:** lists are `{ data: [...] }` (paginated lists add `pagination: { page, pageSize, total, totalPages }`); single records are the record itself; auth endpoints return `{ user, organization }`. Fields are snake_case as stored; request bodies are camelCase. Services open `withOrg(orgId, work)` from `server/src/db/withOrg.js`: one transaction on one pooled connection, with `app.current_org_id` set transaction-locally. Every tenant query inside uses the `client` it's handed, because `pool.query` would run on another connection with no org set and RLS would hide every row.
 
 `withTransaction` (which `withOrg` uses) also handles a connection that dies mid-transaction:
 - It rethrows the original error, not the failed `ROLLBACK`.
@@ -51,6 +51,35 @@ Anything thrown (or a rejected promise from an async handler, which Express 5 fo
 ### Health
 
 `GET /api/health` runs `SELECT 1` through the pool: `200 { status: 'ok', database: 'up' }`, or `503 { status: 'degraded', database: 'down' }`. The pool's 5-second connection timeout keeps this fast when Postgres is down. Render uses this endpoint as its health check.
+
+### Tickets
+
+`server/src/modules/tickets/`. The rules are listed at the top of `tickets.service.js`.
+
+**Visibility.**
+- End users see only tickets they requested; technicians and admins see every ticket in their org.
+- The rule lives in `canView(user, ticket)`. The list and detail queries apply the same rule in SQL (`requester_id = $n`, added only for end users), so an end user's query never even loads another person's ticket.
+- Anything the caller can't see is 404 "Ticket not found", exactly like an id that doesn't exist, so ids can't be probed. 403 is kept for "you can see it, but can't do this": an end user asking for critical priority, changing priority after creation, or editing a ticket that's no longer open.
+
+**Ticket numbers.**
+- Each org numbers its own tickets from 1001 (`organizations.next_ticket_number`), shown as `display_id` `RES-1001`, built in SQL.
+- A number is claimed with one statement: `UPDATE organizations SET next_ticket_number = next_ticket_number + 1 ... RETURNING next_ticket_number - 1`.
+- The `UPDATE` locks the org row until the transaction commits, so tickets created at the same moment queue up and each gets a different number. A separate `SELECT` then `UPDATE` would let two requests read the same value.
+
+**The list query** (`GET /api/tickets`) is built from optional filters without ever putting request data into SQL text:
+- `buildTicketFilters` adds fixed SQL fragments such as `t.status = ANY($2::ticket_status[])`. Each value is pushed into the parameter array, and only its placeholder goes into the SQL.
+- `sort` and `order` are checked by the Zod enum, then mapped through a whitelist (`SORT_COLUMNS`) to fixed column names. Column names can't be parameters, so they must come from our own code. `sort=title;DROP TABLE tickets` fails validation with 400.
+- `ORDER BY <col> <dir> NULLS LAST, t.id DESC`: tickets without a deadline sort last, and the id breaks ties so pages never overlap or skip rows.
+- `COUNT(*) OVER()` returns the number of matching rows on every row, computed before `LIMIT`/`OFFSET`, so one query gives both the page and the total. A page past the end has no rows to carry it, so that rare case runs a separate count.
+- Search matches `title ILIKE '%text%'` (with `%`, `_` and `\` escaped so they match literally), or the exact ticket number when the text is `RES-1003`, `res-1003` or `1003`.
+- Priority sorts by severity because `ticket_priority` is an enum, and enums sort in declaration order.
+- Joined names (`category_name`, `requester_name`, `assignee_name`) save the front end a lookup per row. Queue rows leave out `description`.
+
+**Updates** (`PATCH /api/tickets/:id`):
+- `loadTicketForUpdate` locks the row (`SELECT ... FOR UPDATE OF t`) and returns 404 unless `canView`. Phase 5's status, assignment, priority and comment services start the same way.
+- With the lock, concurrent edits run one after another, and each sees the previous result. A test fires three edits at once and checks that each title event's old value is the previous event's new value.
+- Optimistic locking: the client may send `expectedUpdatedAt` (the `updated_at` it loaded). If the row has changed since, the API answers 409 instead of silently overwriting someone else's edit. The lock covers changes at the same instant; this covers someone editing a copy they loaded minutes ago.
+- Only fields whose value really changes are written. Each one gets a `ticket_events` row (old and new value as text, category by name) in the same transaction, so the history can't disagree with the ticket.
 
 ## Database
 

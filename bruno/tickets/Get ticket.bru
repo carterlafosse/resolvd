@@ -1,0 +1,17 @@
+meta {
+  name: Get ticket
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/tickets/{{ticketId}}
+  body: none
+  auth: none
+}
+
+docs {
+  Set ticketId in the environment (the id, not the RES- number).
+  An end user asking for someone else's ticket, or anyone asking for another
+  organization's ticket, gets 404.
+}

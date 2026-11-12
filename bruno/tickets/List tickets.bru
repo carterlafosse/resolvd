@@ -1,0 +1,31 @@
+meta {
+  name: List tickets
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/tickets?status=open,in_progress&sort=priority&order=desc&page=1&pageSize=25
+  body: none
+  auth: none
+}
+
+params:query {
+  status: open,in_progress
+  sort: priority
+  order: desc
+  page: 1
+  pageSize: 25
+  ~priority: high,critical
+  ~assignee: me
+  ~categoryId: 1
+  ~search: RES-1001
+}
+
+docs {
+  End users see only their own tickets; staff see the whole organization.
+  Filters (all optional, combined with AND): status and priority (comma-separated),
+  assignee (me | unassigned | user id), categoryId, search (title text or RES-1001).
+  sort: created_at | updated_at | priority | resolution_due_at; order: asc | desc.
+  Tick the disabled params to try them. Try page=2&pageSize=1 to see pagination.
+}

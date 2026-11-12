@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Resolvd API
-  version: 0.2.0
+  version: 0.3.0
   description: |
     Multi-organization IT helpdesk API. Each organization's data is isolated in every
     query and again by PostgreSQL row-level security.
@@ -19,12 +19,13 @@ info:
     | 400 | `INVALID_PASSWORD` | `PATCH /users/me`: the current password is wrong |
     | 400 | `CANNOT_CHANGE_SELF` | An admin tried to demote or deactivate themselves |
     | 400 | `LAST_ADMIN` | The change would leave the organization with no active admin |
+    | 400 | `TICKET_CLOSED` | The ticket is closed and can't be changed |
     | 401 | `UNAUTHORIZED` | Not signed in, or the session expired |
     | 401 | `INVALID_CREDENTIALS` | Login: wrong email or password |
     | 401 | `ACCOUNT_LOCKED` | Login: too many failed attempts; try again in 15 minutes |
     | 403 | `FORBIDDEN` | Signed in, but your role can't do this |
     | 404 | `NOT_FOUND` | The route or record doesn't exist, or you can't see it |
-    | 409 | `CONFLICT` | Duplicate value, or the record changed since you loaded it |
+    | 409 | `CONFLICT` | Duplicate value, or the record changed since you loaded it (`expectedUpdatedAt`) |
     | 413 | `PAYLOAD_TOO_LARGE` | The request body is over 100 KB |
     | 415 | `UNSUPPORTED_MEDIA_TYPE` | Unsupported body charset or content encoding |
     | 422 | `UNPROCESSABLE` | Valid input that breaks a business rule |
@@ -50,6 +51,10 @@ tags:
     description: User management (admins), the staff directory, and your own account
   - name: Categories
     description: Ticket categories for the signed-in user's organization
+  - name: Tickets
+    description: |
+      IT tickets. End users see only tickets they requested; technicians and admins see every
+      ticket in their organization. A ticket you can't see is a 404, never a 403.
 paths:
   /auth/register-organization:
     post:
@@ -364,6 +369,179 @@ paths:
         '403': { $ref: '#/components/responses/Forbidden' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
+  /tickets:
+    get:
+      tags: [Tickets]
+      summary: List tickets (the queue)
+      description: |
+        One page of the tickets you can see, with filters, search and sorting. Each filter
+        narrows the result; they combine with AND. Rows leave out `description`.
+      operationId: listTickets
+      parameters:
+        - name: status
+          in: query
+          description: Comma-separated statuses, for example `open,in_progress`.
+          schema: { type: string, example: 'open,in_progress' }
+        - name: priority
+          in: query
+          description: Comma-separated priorities, for example `high,critical`.
+          schema: { type: string, example: 'high,critical' }
+        - name: assignee
+          in: query
+          description: '`me`, `unassigned`, or a user id.'
+          schema: { type: string, example: me }
+        - name: categoryId
+          in: query
+          schema: { type: integer, minimum: 1 }
+        - name: search
+          in: query
+          description: |
+            Matches titles containing the text (case-insensitive; `%` and `_` match
+            literally), or a ticket number typed as `RES-1003`, `res-1003` or `1003`.
+          schema: { type: string, maxLength: 100 }
+        - name: sla
+          in: query
+          description: Accepted now and applied from Phase 6, when tickets get SLA deadlines.
+          schema: { type: string, enum: [breached, at_risk] }
+        - name: sort
+          in: query
+          description: Priority sorts by severity (low < medium < high < critical). Empty values sort last.
+          schema:
+            type: string
+            enum: [created_at, updated_at, priority, resolution_due_at]
+            default: created_at
+        - name: order
+          in: query
+          schema: { type: string, enum: [asc, desc], default: desc }
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 1000000, default: 1 }
+        - name: pageSize
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 25 }
+      responses:
+        '200':
+          description: One page of tickets.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/TicketSummary' }
+                  pagination: { $ref: '#/components/schemas/Pagination' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Tickets]
+      summary: Create a ticket
+      description: |
+        The signed-in user is the requester. The ticket gets the organization's next number
+        (starting at 1001, shown as `RES-1001`) and a `created` event. Only staff may choose
+        `critical` priority (403 otherwise).
+      operationId: createTicket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, description]
+              properties:
+                title: { type: string, minLength: 5, maxLength: 200 }
+                description: { type: string, minLength: 10, maxLength: 5000 }
+                priority: { $ref: '#/components/schemas/TicketPriority' }
+                categoryId: { type: integer, minimum: 1, nullable: true }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+        '400':
+          description: Invalid input, or `categoryId` isn't a category in your organization.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /tickets/{id}:
+    get:
+      tags: [Tickets]
+      summary: Get a ticket
+      operationId: getTicket
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      responses:
+        '200':
+          description: The ticket.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Tickets]
+      summary: Edit a ticket's details
+      description: |
+        The requester may change title, description and category while the ticket is `open`.
+        Staff may change those and the priority at any status except `closed`; nobody can
+        edit a closed ticket (`TICKET_CLOSED`). Each changed field writes one event; fields
+        sent with their current value are ignored.
+
+        Send `expectedUpdatedAt` (the `updated_at` you loaded) to avoid overwriting someone
+        else's change: if the ticket changed since, the response is 409.
+      operationId: updateTicket
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: At least one of title, description, priority or categoryId.
+              properties:
+                title: { type: string, minLength: 5, maxLength: 200 }
+                description: { type: string, minLength: 10, maxLength: 5000 }
+                priority: { $ref: '#/components/schemas/TicketPriority' }
+                categoryId:
+                  type: integer
+                  minimum: 1
+                  nullable: true
+                  description: '`null` removes the category.'
+                expectedUpdatedAt: { type: string, format: date-time }
+      responses:
+        '200':
+          description: The updated ticket.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Ticket' }
+        '400':
+          description: Invalid input, unknown category, or `TICKET_CLOSED`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: |
+            The requester tried to edit a ticket that is no longer open, or to change the
+            priority (staff only).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: The ticket changed since `expectedUpdatedAt`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error:
+                  code: CONFLICT
+                  message: This ticket was changed by someone else. Reload and try again.
   /health:
     get:
       tags: [Health]
@@ -465,6 +643,51 @@ components:
       required: [name]
       properties:
         name: { type: string, minLength: 1, maxLength: 100 }
+    TicketStatus:
+      type: string
+      enum: [open, in_progress, on_hold, resolved, closed]
+    TicketPriority:
+      type: string
+      enum: [low, medium, high, critical]
+      default: medium
+    TicketSummary:
+      type: object
+      description: A queue row. Deadlines are set from Phase 6.
+      properties:
+        id: { type: integer }
+        organization_id: { type: integer }
+        ticket_number: { type: integer, example: 1001 }
+        display_id: { type: string, example: RES-1001 }
+        title: { type: string }
+        status: { $ref: '#/components/schemas/TicketStatus' }
+        priority: { $ref: '#/components/schemas/TicketPriority' }
+        category_id: { type: integer, nullable: true }
+        category_name: { type: string, nullable: true }
+        requester_id: { type: integer }
+        requester_name: { type: string }
+        assignee_id: { type: integer, nullable: true }
+        assignee_name: { type: string, nullable: true }
+        response_due_at: { type: string, format: date-time, nullable: true }
+        resolution_due_at: { type: string, format: date-time, nullable: true }
+        first_response_at: { type: string, format: date-time, nullable: true }
+        resolved_at: { type: string, format: date-time, nullable: true }
+        closed_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    Ticket:
+      description: A full ticket, as returned by create, get and update.
+      allOf:
+        - $ref: '#/components/schemas/TicketSummary'
+        - type: object
+          properties:
+            description: { type: string }
+    Pagination:
+      type: object
+      properties:
+        page: { type: integer }
+        pageSize: { type: integer }
+        total: { type: integer, description: Matching tickets across all pages. }
+        totalPages: { type: integer }
     Error:
       type: object
       required: [error]

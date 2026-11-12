@@ -79,3 +79,25 @@ export async function findUserRow(id) {
   const { rows } = await ownerPool.query('SELECT * FROM users WHERE id = $1', [id]);
   return rows[0];
 }
+
+// Signs up a brand-new organization through the API and returns an agent signed in as its
+// admin. Tests that need predictable data (ticket numbers starting at 1001, an empty queue)
+// use their own org instead of the shared seed orgs.
+export async function registerOrg() {
+  const tag = randomUUID().slice(0, 8);
+  const agent = request.agent(app);
+  const res = await agent
+    .post('/api/auth/register-organization')
+    .set('X-Forwarded-For', nextTestIp())
+    .send({
+      organizationName: `Test Org ${tag}`,
+      slug: `test-org-${tag}`,
+      name: 'Org Admin',
+      email: uniqueEmail('admin'),
+      password: TEST_PASSWORD,
+    });
+  if (res.status !== 201) {
+    throw new Error(`registerOrg failed: ${res.status} ${JSON.stringify(res.body)}`);
+  }
+  return { agent, admin: res.body.user, org: res.body.organization };
+}

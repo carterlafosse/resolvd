@@ -1,0 +1,24 @@
+meta {
+  name: Update ticket
+  type: http
+  seq: 4
+}
+
+patch {
+  url: {{baseUrl}}/tickets/{{ticketId}}
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "title": "VPN disconnects every five minutes at home"
+  }
+}
+
+docs {
+  Also accepts description, categoryId (null removes it) and priority (staff only).
+  The requester can edit only while the ticket is open; staff any time except closed.
+  Add "expectedUpdatedAt": "<updated_at from Get ticket>" to get 409 instead of
+  overwriting a change someone else made in between.
+}

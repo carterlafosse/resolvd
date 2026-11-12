@@ -1,0 +1,26 @@
+meta {
+  name: Create ticket
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/tickets
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "title": "VPN disconnects every few minutes",
+    "description": "Since this morning the VPN drops about every five minutes while I'm working from home.",
+    "priority": "high",
+    "categoryId": {{categoryId}}
+  }
+}
+
+docs {
+  Any signed-in user (201). The caller becomes the requester. Numbers are per organization,
+  starting at RES-1001. Only technicians and admins may use "priority": "critical" (403 otherwise).
+  categoryId is optional; another organization's category gives 400.
+}
