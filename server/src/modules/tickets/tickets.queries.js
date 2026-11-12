@@ -78,6 +78,50 @@ export async function findTicketById(client, id, { requesterId = null } = {}) {
   return rows[0] ?? null;
 }
 
+// Loads a ticket and locks its row until the transaction ends, so two people changing the same
+// ticket at once run one after the other and each sees the other's result. Category name is
+// included because change events record categories by name.
+// FOR UPDATE OF t locks only the ticket: Postgres can't lock the nullable side of a LEFT JOIN,
+// and the category row doesn't need locking.
+export async function lockTicket(client, id) {
+  const { rows } = await client.query(
+    `SELECT t.id, t.requester_id, t.status, t.title, t.description, t.priority,
+            t.category_id, c.name AS category_name, t.updated_at
+     FROM tickets t
+     LEFT JOIN categories c ON c.organization_id = t.organization_id AND c.id = t.category_id
+     WHERE t.id = $1 AND t.organization_id = current_org_id()
+     FOR UPDATE OF t`,
+    [id],
+  );
+  return rows[0] ?? null;
+}
+
+// API field name -> column. Only these columns can ever appear in the SET clause; values are
+// always parameters.
+const UPDATABLE_COLUMNS = {
+  title: 'title',
+  description: 'description',
+  priority: 'priority',
+  categoryId: 'category_id',
+};
+
+export async function updateTicket(client, id, changes) {
+  const sets = [];
+  const values = [];
+  for (const [field, column] of Object.entries(UPDATABLE_COLUMNS)) {
+    if (changes[field] === undefined) continue;
+    values.push(changes[field]);
+    sets.push(`${column} = $${values.length}`);
+  }
+  values.push(id);
+
+  await client.query(
+    `UPDATE tickets SET ${sets.join(', ')}
+     WHERE id = $${values.length} AND organization_id = current_org_id()`,
+    values,
+  );
+}
+
 // Sort names from the API -> SQL. Only these fixed strings can ever reach ORDER BY; the schema
 // already limits `sort` and `order` to these keys, and the lookup below refuses anything else.
 const SORT_COLUMNS = {
