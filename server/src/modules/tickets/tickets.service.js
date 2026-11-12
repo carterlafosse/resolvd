@@ -4,7 +4,7 @@ import { AppError } from '../../utils/AppError.js';
 import { buildPagination, toLimitOffset } from '../../utils/pagination.js';
 import { fieldError } from '../../utils/pgErrors.js';
 import * as queries from './tickets.queries.js';
-import { isStaff } from './workflow.js';
+import { canTransition, isStaff, statusChangeEffects } from './workflow.js';
 
 // Rules (all enforced here; tickets.queries.js only runs SQL):
 // - End users see only tickets they requested. Technicians and admins see every ticket in
@@ -19,6 +19,11 @@ import { isStaff } from './workflow.js';
 //   and creating a ticket writes a "created" event.
 // - An update can carry expectedUpdatedAt; if the ticket changed since then, it's refused
 //   with 409 so one person's edit never silently overwrites another's.
+// - Status changes follow the workflow in workflow.js (who may move a ticket from which
+//   status to which). A refused move is 400 INVALID_TRANSITION with the workflow's reason.
+//   Resolving sets resolved_at, reopening a resolved ticket clears it, closing sets closed_at.
+// - Every write locks the ticket row first (loadTicketForUpdate), so concurrent changes to one
+//   ticket run one after another and their events form one consistent history.
 
 // isStaff lives in workflow.js (no database imports) and is re-exported for the other modules.
 export { isStaff };
@@ -192,6 +197,41 @@ export function updateTicket(user, ticketId, { expectedUpdatedAt, ...requested }
       }
     }
 
+    return queries.findTicketById(client, ticketId);
+  });
+}
+
+// Moves a locked ticket to a new status: sets the workflow's timestamps and writes the status
+// event. It doesn't check who may do this; callers check canTransition first, or (for the
+// automatic moves after assigning or a requester's reply) are the rule themselves.
+// Updates `ticket` in place so later steps in the same transaction see the new status.
+export async function writeStatusChange(client, { ticket, to, actorId, now }) {
+  const from = ticket.status;
+  await queries.updateTicket(client, ticket.id, {
+    status: to,
+    ...statusChangeEffects({ from, to, now }),
+  });
+  await queries.insertEvent(client, {
+    ticketId: ticket.id,
+    actorId,
+    field: 'status',
+    oldValue: from,
+    newValue: to,
+  });
+  ticket.status = to;
+}
+
+// PATCH /api/tickets/:id/status
+export function changeStatus(user, ticketId, { status }) {
+  return withOrg(user.orgId, async (client) => {
+    const ticket = await loadTicketForUpdate(client, user, ticketId);
+
+    // One clock for the decision and the timestamps it writes.
+    const now = new Date();
+    const check = canTransition({ ticket, to: status, user, now });
+    if (!check.ok) throw AppError.badRequest(check.reason, undefined, 'INVALID_TRANSITION');
+
+    await writeStatusChange(client, { ticket, to: status, actorId: user.id, now });
     return queries.findTicketById(client, ticketId);
   });
 }

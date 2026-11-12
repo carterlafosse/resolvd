@@ -79,16 +79,19 @@ export async function findTicketById(client, id, { requesterId = null } = {}) {
 }
 
 // Loads a ticket and locks its row until the transaction ends, so two people changing the same
-// ticket at once run one after the other and each sees the other's result. Category name is
-// included because change events record categories by name.
+// ticket at once run one after the other and each sees the other's result. Category and
+// assignee names are included because change events record them by name.
 // FOR UPDATE OF t locks only the ticket: Postgres can't lock the nullable side of a LEFT JOIN,
-// and the category row doesn't need locking.
+// and the category and assignee rows don't need locking.
 export async function lockTicket(client, id) {
   const { rows } = await client.query(
     `SELECT t.id, t.requester_id, t.status, t.title, t.description, t.priority,
-            t.category_id, c.name AS category_name, t.updated_at
+            t.category_id, c.name AS category_name,
+            t.assignee_id, a.name AS assignee_name,
+            t.first_response_at, t.resolved_at, t.updated_at
      FROM tickets t
      LEFT JOIN categories c ON c.organization_id = t.organization_id AND c.id = t.category_id
+     LEFT JOIN users a ON a.organization_id = t.organization_id AND a.id = t.assignee_id
      WHERE t.id = $1 AND t.organization_id = current_org_id()
      FOR UPDATE OF t`,
     [id],
@@ -96,13 +99,19 @@ export async function lockTicket(client, id) {
   return rows[0] ?? null;
 }
 
-// API field name -> column. Only these columns can ever appear in the SET clause; values are
-// always parameters.
+// Field name -> column. Only these columns can ever appear in the SET clause; values are
+// always parameters. The service decides which fields a request may change; a value of
+// null clears the column, undefined leaves it alone.
 const UPDATABLE_COLUMNS = {
   title: 'title',
   description: 'description',
   priority: 'priority',
   categoryId: 'category_id',
+  status: 'status',
+  assigneeId: 'assignee_id',
+  firstResponseAt: 'first_response_at',
+  resolvedAt: 'resolved_at',
+  closedAt: 'closed_at',
 };
 
 export async function updateTicket(client, id, changes) {

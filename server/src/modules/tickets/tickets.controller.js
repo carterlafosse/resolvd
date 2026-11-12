@@ -16,3 +16,7 @@ export async function get(req, res) {
 export async function update(req, res) {
   res.json(await ticketsService.updateTicket(req.user, req.params.id, req.body));
 }
+
+export async function changeStatus(req, res) {
+  res.json(await ticketsService.changeStatus(req.user, req.params.id, req.body));
+}

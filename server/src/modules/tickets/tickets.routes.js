@@ -4,6 +4,7 @@ import { authenticate } from '../../middleware/auth.js';
 import { validate } from '../../middleware/validate.js';
 import * as controller from './tickets.controller.js';
 import {
+  changeStatusSchema,
   createTicketSchema,
   listTicketsQuery,
   ticketIdParams,
@@ -21,4 +22,12 @@ ticketsRouter.patch(
   '/:id',
   validate({ params: ticketIdParams, body: updateTicketSchema }),
   controller.update,
+);
+
+// Any signed-in user: the workflow decides who may make each move (requesters can confirm or
+// reopen a resolved ticket).
+ticketsRouter.patch(
+  '/:id/status',
+  validate({ params: ticketIdParams, body: changeStatusSchema }),
+  controller.changeStatus,
 );

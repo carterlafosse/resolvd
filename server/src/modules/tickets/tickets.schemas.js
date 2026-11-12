@@ -41,6 +41,9 @@ export const updateTicketSchema = z
     'Provide at least one field to update',
   );
 
+// PATCH /tickets/:id/status. Whether the move is allowed is the workflow's decision, not the schema's.
+export const changeStatusSchema = z.object({ status: statusSchema });
+
 // "open,in_progress" -> ['open', 'in_progress'], each checked against the enum.
 function commaList(itemSchema) {
   return z
