@@ -2,9 +2,13 @@
 import { createApp } from './app.js';
 import { env } from './config/env.js';
 import { pool } from './db/pool.js';
+import { startSlaChecker } from './jobs/slaChecker.js';
 import { logger } from './utils/logger.js';
 
 const app = createApp();
+
+// Tests never start the schedule; they call runSlaCheck() directly when they need a check.
+const slaChecker = env.NODE_ENV === 'test' ? null : startSlaChecker();
 
 // Express 5 passes listen errors (such as the port already being in use) to this callback.
 const server = app.listen(env.PORT, (err) => {
@@ -27,6 +31,10 @@ function shutdown(signal) {
     logger.error('Shutdown timed out; forcing exit');
     process.exit(1);
   }, 10_000).unref();
+
+  // No new SLA checks once shutdown starts. A check already running finishes, because
+  // pool.end() below waits for its connection to be released.
+  slaChecker?.stop();
 
   // Stop accepting new connections and let in-flight requests finish, then close the pool.
   server.close(async (err) => {

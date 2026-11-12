@@ -3,7 +3,7 @@ import { withOrg } from '../../db/withOrg.js';
 import { AppError } from '../../utils/AppError.js';
 import { buildPagination, toLimitOffset } from '../../utils/pagination.js';
 import { fieldError } from '../../utils/pgErrors.js';
-import { withSla } from '../sla/sla.js';
+import { slaSummary, withSla } from '../sla/sla.js';
 import { dueDatesFor } from '../sla/sla.service.js';
 import * as queries from './tickets.queries.js';
 import { canTransition, isStaff, statusChangeEffects } from './workflow.js';
@@ -38,6 +38,7 @@ import { canTransition, isStaff, statusChangeEffects } from './workflow.js';
 //   org's policy for its priority, counted from created_at, in the same transaction. A
 //   priority change (PATCH /:id or /:id/priority) recalculates both from created_at and
 //   writes a response_due_at and a resolution_due_at event for each deadline that moved.
+//   A breach the SLA job recorded is cleared if the new deadline isn't breached.
 // - Resolving a ticket counts as the first response if no public staff reply came first.
 // - Every ticket returned (list and detail) carries sla: { response, resolution, overall }.
 
@@ -136,9 +137,25 @@ function isoOrNull(date) {
 // A new priority means new deadlines, recalculated from created_at with the org's policy for
 // that priority (the original start time stays, so changing priority never resets the clock).
 // Returns the column changes and one event per deadline that actually moved.
-async function deadlineChangesFor(client, ticket, priority) {
+async function deadlineChangesFor(client, ticket, priority, now = new Date()) {
   const { responseDueAt, resolutionDueAt } = await dueDatesFor(client, priority, ticket.created_at);
   const changes = { responseDueAt, resolutionDueAt };
+
+  // A breach recorded by the SLA job belongs to the old deadline. If the new deadline hasn't
+  // been breached (for example, critical lowered to low), clear the mark so the job can
+  // record a breach of the new deadline if it passes. If the new deadline is breached too,
+  // the mark stays, so the same breach isn't recorded twice. The old sla_breach event stays
+  // in the history either way.
+  const sla = slaSummary(
+    { ...ticket, response_due_at: responseDueAt, resolution_due_at: resolutionDueAt },
+    now,
+  );
+  if (ticket.response_breached_at !== null && sla.response !== 'breached') {
+    changes.responseBreachedAt = null;
+  }
+  if (ticket.resolution_breached_at !== null && sla.resolution !== 'breached') {
+    changes.resolutionBreachedAt = null;
+  }
 
   const events = [];
   for (const [field, oldValue, newValue] of [

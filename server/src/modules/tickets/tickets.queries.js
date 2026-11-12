@@ -160,6 +160,7 @@ export async function lockTicket(client, id) {
             t.category_id, c.name AS category_name,
             t.assignee_id, a.name AS assignee_name,
             t.created_at, t.response_due_at, t.resolution_due_at,
+            t.response_breached_at, t.resolution_breached_at,
             t.first_response_at, t.resolved_at, t.updated_at
      FROM tickets t
      LEFT JOIN categories c ON c.organization_id = t.organization_id AND c.id = t.category_id
@@ -198,6 +199,8 @@ const UPDATABLE_COLUMNS = {
   firstResponseAt: 'first_response_at',
   responseDueAt: 'response_due_at',
   resolutionDueAt: 'resolution_due_at',
+  responseBreachedAt: 'response_breached_at',
+  resolutionBreachedAt: 'resolution_breached_at',
   resolvedAt: 'resolved_at',
   closedAt: 'closed_at',
 };
