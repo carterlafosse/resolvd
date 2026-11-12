@@ -1,5 +1,8 @@
 // Tickets business rules: who can see, create and edit tickets, and the change history they leave.
+import { withOrg } from '../../db/withOrg.js';
 import { AppError } from '../../utils/AppError.js';
+import { fieldError } from '../../utils/pgErrors.js';
+import * as queries from './tickets.queries.js';
 
 // Rules (all enforced here; tickets.queries.js only runs SQL):
 // - End users see only tickets they requested. Technicians and admins see every ticket in
@@ -56,4 +59,42 @@ export function assertCanSetPriority(user, priority) {
   if (priority === 'critical' && !isStaff(user)) {
     throw AppError.forbidden('Only support staff can set critical priority');
   }
+}
+
+// A categoryId that doesn't exist in the org (or belongs to another org) is a field error the
+// form can show, not a 404: the ticket itself is what the request is about.
+async function categoryNameOrError(client, categoryId) {
+  const name = await queries.findCategoryName(client, categoryId);
+  if (name === null) {
+    throw AppError.validation('Category not found', fieldError('categoryId', 'Category not found'));
+  }
+  return name;
+}
+
+// POST /api/tickets
+export function createTicket(user, { title, description, priority, categoryId }) {
+  assertCanSetPriority(user, priority);
+
+  return withOrg(user.orgId, async (client) => {
+    if (categoryId != null) await categoryNameOrError(client, categoryId);
+
+    const ticketNumber = await queries.claimTicketNumber(client);
+    const ticketId = await queries.insertTicket(client, {
+      ticketNumber,
+      title,
+      description,
+      priority,
+      categoryId,
+      requesterId: user.id,
+    });
+    // new_value records the starting status, so the status history begins at creation.
+    await queries.insertEvent(client, {
+      ticketId,
+      actorId: user.id,
+      field: 'created',
+      newValue: 'open',
+    });
+
+    return queries.findTicketById(client, ticketId);
+  });
 }

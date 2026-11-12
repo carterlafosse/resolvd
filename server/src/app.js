@@ -13,6 +13,7 @@ import { notFound } from './middleware/notFound.js';
 import { authRouter } from './modules/auth/auth.routes.js';
 import { categoriesRouter } from './modules/categories/categories.routes.js';
 import { healthRouter } from './modules/health/health.routes.js';
+import { ticketsRouter } from './modules/tickets/tickets.routes.js';
 import { usersRouter } from './modules/users/users.routes.js';
 import { logger } from './utils/logger.js';
 
@@ -57,6 +58,7 @@ export function createApp() {
   app.use('/api/auth', authRouter);
   app.use('/api/users', usersRouter);
   app.use('/api/categories', categoriesRouter);
+  app.use('/api/tickets', ticketsRouter);
 
   app.use(notFound);
   app.use(errorHandler);
