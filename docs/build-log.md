@@ -66,3 +66,34 @@
 
 **Next:**
 - Phase 2: Express server foundation (issue #4)
+
+## 2026-11-11 (Phase 2: Express server foundation)
+
+**Did:**
+- Claude Code built the Express foundation: validated config, pino logging, the database pool and `withOrg` transaction helpers, `AppError` and the error handler, security middleware, graceful shutdown, the health check and Swagger docs
+- Asked it to match ScreenGuide AI's error handling so the two stay compatible: body-parser errors (`INVALID_JSON`, `PAYLOAD_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE`), ten `AppError` helpers, and Zod 4's `z.flattenError` for validation details
+- Created `server/.env.test` for the `resolvd_test` database
+- Checked by hand: `/api/health` returned 200, then 503 with PostgreSQL stopped; Swagger UI loaded at `/api/docs`; removing `JWT_SECRET` gave a clear startup error; Ctrl+C logged "Shutting down"
+- Ran lint and all 29 tests, and took two Swagger screenshots
+
+**Problems:**
+- 6 tests failed with "password authentication failed for user resolvd_app". The password in `.env.test` didn't match the real one. Copying it exactly from `.env` fixed it
+- I accidentally edited `.env.test.example` (the committed placeholder file) instead of `.env.test`. `git diff` caught it before committing, and `git restore` put it back
+
+**Learned:**
+- When many tests fail at once, look for one shared cause. Here every database test failed and every non-database test passed
+- Always check `git status` and `git diff` before committing; it caught my mistake
+- Validating config at startup means a bad `.env` fails immediately with a clear message, instead of a confusing crash later
+
+**Concept checks:**
+- Why must every query inside `withOrg` use `client` instead of `pool`?
+    - `withOrg` runs one transaction on one connection and sets `app.current_org_id` on it. `pool.query` could use a different connection, which would run outside the transaction and without the org setting, so RLS would hide everything and a rollback wouldn't undo it
+- Why does the error handler need four parameters?
+    - Express recognizes error-handling middleware by its four parameters `(err, req, res, next)`. With three, Express treats it as normal middleware and never sends errors to it
+- Why are raw database errors never sent to the client?
+    - They can reveal table names, column names and internal details an attacker could use. The full error goes to the server log, and the client gets a safe message and code
+- What does `trust proxy` change?
+    - On Render, requests arrive through a proxy, so Express would see the proxy's IP for every user. `trust proxy` tells Express to read the real client IP from the proxy's headers, so rate limiting works per user instead of treating everyone as one
+
+**Next:**
+- Phase 3: authentication, roles and admin endpoints (issue #5)
