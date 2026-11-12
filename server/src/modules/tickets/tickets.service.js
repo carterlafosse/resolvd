@@ -3,6 +3,8 @@ import { withOrg } from '../../db/withOrg.js';
 import { AppError } from '../../utils/AppError.js';
 import { buildPagination, toLimitOffset } from '../../utils/pagination.js';
 import { fieldError } from '../../utils/pgErrors.js';
+import { withSla } from '../sla/sla.js';
+import { dueDatesFor } from '../sla/sla.service.js';
 import * as queries from './tickets.queries.js';
 import { canTransition, isStaff, statusChangeEffects } from './workflow.js';
 
@@ -32,6 +34,12 @@ import { canTransition, isStaff, statusChangeEffects } from './workflow.js';
 //   and hides internal notes from end users, like the comments endpoint.
 // - Every write locks the ticket row first (loadTicketForUpdate), so concurrent changes to one
 //   ticket run one after another and their events form one consistent history.
+// - SLA (rules in sla/sla.js): a new ticket gets response and resolution deadlines from its
+//   org's policy for its priority, counted from created_at, in the same transaction. A
+//   priority change (PATCH /:id or /:id/priority) recalculates both from created_at and
+//   writes a response_due_at and a resolution_due_at event for each deadline that moved.
+// - Resolving a ticket counts as the first response if no public staff reply came first.
+// - Every ticket returned (list and detail) carries sla: { response, resolution, overall }.
 
 // isStaff lives in workflow.js (no database imports) and is re-exported for the other modules.
 export { isStaff };
@@ -91,7 +99,7 @@ export function createTicket(user, { title, description, priority, categoryId })
     if (categoryId != null) await categoryNameOrError(client, categoryId);
 
     const ticketNumber = await queries.claimTicketNumber(client);
-    const ticketId = await queries.insertTicket(client, {
+    const { id: ticketId, created_at: createdAt } = await queries.insertTicket(client, {
       ticketNumber,
       title,
       description,
@@ -99,6 +107,9 @@ export function createTicket(user, { title, description, priority, categoryId })
       categoryId,
       requesterId: user.id,
     });
+    // Deadlines count from the created_at the database just stored, so they line up exactly.
+    // Setting them is part of creating the ticket, so it writes no event of its own.
+    await queries.updateTicket(client, ticketId, await dueDatesFor(client, priority, createdAt));
     // new_value records the starting status, so the status history begins at creation.
     await queries.insertEvent(client, {
       ticketId,
@@ -107,8 +118,38 @@ export function createTicket(user, { title, description, priority, categoryId })
       newValue: 'open',
     });
 
-    return queries.findTicketById(client, ticketId);
+    return findTicketWithSla(client, ticketId);
   });
+}
+
+// A ticket as every endpoint returns it: the row plus its SLA summary as of now.
+async function findTicketWithSla(client, ticketId, options) {
+  const ticket = await queries.findTicketById(client, ticketId, options);
+  return ticket && withSla(ticket);
+}
+
+// Deadlines are stored as timestamps; events store text, so they record ISO strings.
+function isoOrNull(date) {
+  return date === null ? null : new Date(date).toISOString();
+}
+
+// A new priority means new deadlines, recalculated from created_at with the org's policy for
+// that priority (the original start time stays, so changing priority never resets the clock).
+// Returns the column changes and one event per deadline that actually moved.
+async function deadlineChangesFor(client, ticket, priority) {
+  const { responseDueAt, resolutionDueAt } = await dueDatesFor(client, priority, ticket.created_at);
+  const changes = { responseDueAt, resolutionDueAt };
+
+  const events = [];
+  for (const [field, oldValue, newValue] of [
+    ['response_due_at', ticket.response_due_at, responseDueAt],
+    ['resolution_due_at', ticket.resolution_due_at, resolutionDueAt],
+  ]) {
+    if (isoOrNull(oldValue) !== isoOrNull(newValue)) {
+      events.push({ field, oldValue: isoOrNull(oldValue), newValue: isoOrNull(newValue) });
+    }
+  }
+  return { changes, events };
 }
 
 // Every service that changes a ticket starts here: lock the row, then 404 unless the caller
@@ -130,7 +171,7 @@ export async function loadTicketForRead(client, user, ticketId) {
 // GET /api/tickets/:id. The visibility rule is in the query's WHERE clause.
 export function getTicket(user, ticketId) {
   return withOrg(user.orgId, async (client) => {
-    const ticket = await queries.findTicketById(client, ticketId, {
+    const ticket = await findTicketWithSla(client, ticketId, {
       requesterId: requesterIdFilter(user),
     });
     if (!ticket) throw ticketNotFound();
@@ -196,6 +237,11 @@ export function updateTicket(user, ticketId, { expectedUpdatedAt, ...requested }
         throw AppError.forbidden('Only support staff can change the priority');
       }
       assertCanSetPriority(user, changes.priority);
+
+      // Same recalculation as changePriority, so both ways of changing priority agree.
+      const deadlines = await deadlineChangesFor(client, ticket, changes.priority);
+      Object.assign(changes, deadlines.changes);
+      events.push(...deadlines.events);
     }
 
     // Categories are recorded by name in the history, which stays readable after a rename.
@@ -213,7 +259,7 @@ export function updateTicket(user, ticketId, { expectedUpdatedAt, ...requested }
       }
     }
 
-    return queries.findTicketById(client, ticketId);
+    return findTicketWithSla(client, ticketId);
   });
 }
 
@@ -237,9 +283,10 @@ export async function writeStatusChange(client, { ticket, to, actorId, now }) {
   ticket.status = to;
 }
 
-// Records when staff first replied publicly (the SLA response clock from Phase 6). Only the
-// first reply counts, so a ticket that already has one is left alone. The comment itself is
-// the record of the reply, so no separate event is written.
+// Records when staff first replied publicly, which stops the SLA response clock: the first
+// public staff comment, or resolving the ticket if that came first. Only the first counts,
+// so a ticket that already has one is left alone. The comment or status event is itself the
+// record, so no separate event is written.
 export async function recordFirstResponse(client, ticket, at) {
   if (ticket.first_response_at !== null) return;
   await queries.updateTicket(client, ticket.id, { firstResponseAt: at });
@@ -257,7 +304,11 @@ export function changeStatus(user, ticketId, { status }) {
     if (!check.ok) throw AppError.badRequest(check.reason, undefined, 'INVALID_TRANSITION');
 
     await writeStatusChange(client, { ticket, to: status, actorId: user.id, now });
-    return queries.findTicketById(client, ticketId);
+    // Only staff can resolve (workflow.js), and telling the requester "this is fixed" is a
+    // response. Without this, a ticket resolved before anyone commented would show its
+    // response clock running on, and later breaching, after the work was already done.
+    if (status === 'resolved') await recordFirstResponse(client, ticket, now);
+    return findTicketWithSla(client, ticketId);
   });
 }
 
@@ -273,7 +324,7 @@ export function assignTicket(user, ticketId, assigneeId) {
     assertNotClosed(ticket);
 
     // Assigning to the current assignee is not a change: no event, no status move.
-    if (assigneeId === ticket.assignee_id) return queries.findTicketById(client, ticketId);
+    if (assigneeId === ticket.assignee_id) return findTicketWithSla(client, ticketId);
 
     let assigneeName = UNASSIGNED;
     if (assigneeId !== null) {
@@ -305,29 +356,30 @@ export function assignTicket(user, ticketId, assigneeId) {
       });
     }
 
-    return queries.findTicketById(client, ticketId);
+    return findTicketWithSla(client, ticketId);
   });
 }
 
 // PATCH /api/tickets/:id/priority (staff only; the route checks the role).
-// Phase 6 recalculates the SLA deadlines here.
+// Recalculates the SLA deadlines from created_at for the new priority.
 export function changePriority(user, ticketId, { priority }) {
   return withOrg(user.orgId, async (client) => {
     const ticket = await loadTicketForUpdate(client, user, ticketId);
     assertNotClosed(ticket);
 
     if (priority !== ticket.priority) {
-      await queries.updateTicket(client, ticketId, { priority });
-      await queries.insertEvent(client, {
-        ticketId,
-        actorId: user.id,
-        field: 'priority',
-        oldValue: ticket.priority,
-        newValue: priority,
-      });
+      const deadlines = await deadlineChangesFor(client, ticket, priority);
+      await queries.updateTicket(client, ticketId, { priority, ...deadlines.changes });
+      const events = [
+        { field: 'priority', oldValue: ticket.priority, newValue: priority },
+        ...deadlines.events,
+      ];
+      for (const e of events) {
+        await queries.insertEvent(client, { ticketId, actorId: user.id, ...e });
+      }
     }
 
-    return queries.findTicketById(client, ticketId);
+    return findTicketWithSla(client, ticketId);
   });
 }
 
@@ -370,12 +422,18 @@ export function listTickets(user, query) {
     ...(search ? parseTicketSearch(search) : {}),
   };
 
+  // One clock for the whole page, so every row's sla summary is judged at the same moment.
+  const now = new Date();
+
   return withOrg(user.orgId, async (client) => {
     const { rows, total } = await queries.listTickets(client, filters, {
       sort,
       order,
       ...toLimitOffset({ page, pageSize }),
     });
-    return { data: rows, pagination: buildPagination({ page, pageSize, total }) };
+    return {
+      data: rows.map((ticket) => withSla(ticket, now)),
+      pagination: buildPagination({ page, pageSize, total }),
+    };
   });
 }

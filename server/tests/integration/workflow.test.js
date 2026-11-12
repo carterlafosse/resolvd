@@ -372,12 +372,20 @@ describe('PATCH /api/tickets/:id/priority', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.priority).toBe('critical');
-    expect((await eventsFor(ticket.id)).at(-1)).toEqual({
+    const events = await eventsFor(ticket.id);
+    expect(events.find((e) => e.field === 'priority')).toEqual({
       actor_id: ctx.techUser.id,
       field: 'priority',
       old_value: 'low',
       new_value: 'critical',
     });
+    // The SLA deadline events that follow it are covered in sla.test.js.
+    expect(events.map((e) => e.field)).toEqual([
+      'created',
+      'priority',
+      'response_due_at',
+      'resolution_due_at',
+    ]);
   });
 
   it('writes nothing when the priority is unchanged', async () => {

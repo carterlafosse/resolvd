@@ -257,15 +257,26 @@ describe('GET /api/tickets', () => {
   });
 
   it('puts tickets without a due date last, then newest id first', async () => {
-    await setTicketColumns(t[1003].id, { resolution_due_at: '2030-01-01T00:00:00Z' });
-    await setTicketColumns(t[1001].id, { resolution_due_at: '2030-06-01T00:00:00Z' });
+    // Every new ticket gets a deadline (Phase 6), so give two of them far-off ones, clear the
+    // rest (as for tickets created before deadlines existed), and put the originals back.
+    const dueDates = {
+      1003: '2030-01-01T00:00:00Z',
+      1001: '2030-06-01T00:00:00Z',
+      1002: null,
+      1004: null,
+      1005: null,
+    };
+    for (const [number, due] of Object.entries(dueDates)) {
+      await setTicketColumns(t[number].id, { resolution_due_at: due });
+    }
     try {
       expect(ids(await ctx.tech.get('/api/tickets?sort=resolution_due_at&order=asc'))).toEqual([
         1003, 1001, 1005, 1004, 1002,
       ]);
     } finally {
-      await setTicketColumns(t[1003].id, { resolution_due_at: null });
-      await setTicketColumns(t[1001].id, { resolution_due_at: null });
+      for (const number of Object.keys(dueDates)) {
+        await setTicketColumns(t[number].id, { resolution_due_at: t[number].resolution_due_at });
+      }
     }
   });
 
@@ -445,7 +456,16 @@ describe('PATCH /api/tickets/:id', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ title: 'Edited by tech', priority: 'critical' });
-    expect((await eventsFor(ticket.id)).at(-1)).toEqual({
+    // A priority change also moves both SLA deadlines (counted from created_at).
+    const plus = (minutes) =>
+      new Date(new Date(ticket.created_at).getTime() + minutes * 60_000).toISOString();
+    expect((await eventsFor(ticket.id)).slice(1).map((e) => [e.field, e.new_value])).toEqual([
+      ['title', 'Edited by tech'],
+      ['priority', 'critical'],
+      ['response_due_at', plus(60)],
+      ['resolution_due_at', plus(240)],
+    ]);
+    expect((await eventsFor(ticket.id)).find((e) => e.field === 'priority')).toEqual({
       actor_id: ctx.techUser.id,
       field: 'priority',
       old_value: 'medium',

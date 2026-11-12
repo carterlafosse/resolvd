@@ -34,6 +34,7 @@ export async function claimTicketNumber(client) {
 }
 
 // organization_id comes from the transaction's org setting, never from request data.
+// Returns the new id and created_at, which the SLA deadlines are counted from.
 export async function insertTicket(
   client,
   { ticketNumber, title, description, priority, categoryId, requesterId },
@@ -42,10 +43,10 @@ export async function insertTicket(
     `INSERT INTO tickets
        (organization_id, ticket_number, title, description, priority, category_id, requester_id)
      VALUES (current_org_id(), $1, $2, $3, $4, $5, $6)
-     RETURNING id`,
+     RETURNING id, created_at`,
     [ticketNumber, title, description, priority, categoryId ?? null, requesterId],
   );
-  return rows[0].id;
+  return rows[0];
 }
 
 // One row in the ticket's history. Values are stored as text so every field fits one shape.
@@ -149,7 +150,8 @@ export async function findTicketAccess(client, id) {
 
 // Loads a ticket and locks its row until the transaction ends, so two people changing the same
 // ticket at once run one after the other and each sees the other's result. Category and
-// assignee names are included because change events record them by name.
+// assignee names are included because change events record them by name, and the SLA
+// columns because a priority change recalculates the deadlines.
 // FOR UPDATE OF t locks only the ticket: Postgres can't lock the nullable side of a LEFT JOIN,
 // and the category and assignee rows don't need locking.
 export async function lockTicket(client, id) {
@@ -157,6 +159,7 @@ export async function lockTicket(client, id) {
     `SELECT t.id, t.requester_id, t.status, t.title, t.description, t.priority,
             t.category_id, c.name AS category_name,
             t.assignee_id, a.name AS assignee_name,
+            t.created_at, t.response_due_at, t.resolution_due_at,
             t.first_response_at, t.resolved_at, t.updated_at
      FROM tickets t
      LEFT JOIN categories c ON c.organization_id = t.organization_id AND c.id = t.category_id
@@ -193,6 +196,8 @@ const UPDATABLE_COLUMNS = {
   status: 'status',
   assigneeId: 'assignee_id',
   firstResponseAt: 'first_response_at',
+  responseDueAt: 'response_due_at',
+  resolutionDueAt: 'resolution_due_at',
   resolvedAt: 'resolved_at',
   closedAt: 'closed_at',
 };

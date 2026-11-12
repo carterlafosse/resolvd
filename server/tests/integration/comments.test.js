@@ -194,6 +194,9 @@ describe('GET /api/tickets/:id/events and /activity', () => {
         ['System', 'sla_breach', null, 'resolution'],
         ['Alice User', 'status', 'on_hold', 'in_progress'],
         ['Tess Tech', 'status', 'in_progress', 'on_hold'],
+        // The priority change moved both SLA deadlines (new values checked in sla.test.js).
+        ['Tess Tech', 'resolution_due_at', ticket.resolution_due_at, expect.any(String)],
+        ['Tess Tech', 'response_due_at', ticket.response_due_at, expect.any(String)],
         ['Tess Tech', 'priority', 'low', 'high'],
         ['Org Admin', 'status', 'open', 'in_progress'],
         ['Org Admin', 'assignee', 'Unassigned', 'Tess Tech'],
@@ -240,6 +243,8 @@ describe('GET /api/tickets/:id/events and /activity', () => {
         ['event', 'Org Admin', 'assignee', true],
         ['event', 'Org Admin', 'status', false],
         ['event', 'Tess Tech', 'priority', true],
+        ['event', 'Tess Tech', 'response_due_at', true],
+        ['event', 'Tess Tech', 'resolution_due_at', true],
         ['comment', 'Tess Tech', 'Can you send a photo of the screen?', false],
         ['comment', 'Tess Tech', 'Looks like a hardware fault', true],
         ['event', 'Tess Tech', 'status', false],
