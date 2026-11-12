@@ -278,4 +278,71 @@ Recording a breach updates the ticket row, so its `updated_at` changes (the `set
 
 ## Front end
 
+React (Vite) in `client/`, with Mantine for components, React Router for pages and TanStack Query for server data.
+
+### One origin
+
+The browser only ever talks to the front end's own origin. In development Vite forwards `/api` to `http://localhost:4000` (`client/vite.config.js`); in production a Vercel rewrite forwards `/api` to Render (Phase 10). So:
+- The `resolvd_token` cookie is a first-party cookie. Browsers that block third-party cookies (Safari, and Chrome's settings) still send it.
+- There are no cross-origin requests, so no CORS preflights. The API's CORS setting is a fallback, not something the app relies on.
+
+### Talking to the API
+
+Every request goes through `client/src/api/client.js`: `api(path, { method, body, query })`.
+- Paths are relative to `/api`; `credentials: 'include'` sends the cookie.
+- Empty query values are left out and arrays are sent comma-separated (`status=open,on_hold`).
+- Any failure becomes an `ApiError(status, code, message, details)`. The API's `{ error: { code, message, details } }` body is used as is. A response without that shape (for example the proxy's error page when the API isn't running) gets a generic message, and a request that never reached a server is status 0 `NETWORK_ERROR`.
+- `error.fieldErrors` turns the API's `{ fieldErrors: { slug: ['...'] } }` into `{ slug: '...' }`, ready for a form.
+
+The files `api/auth.js`, `tickets.js`, `users.js`, `categories.js` and `sla.js` are one-line wrappers per endpoint, so components never build URLs.
+
+### Server state with TanStack Query
+
+`client/src/main.jsx` creates one `QueryClient`:
+- **Retries:** once, and only for network or 5xx errors. A 4xx answer would be the same the second time.
+- **Refetch on window focus:** coming back to the tab refreshes stale data, so a queue left open doesn't go out of date.
+- **Mutation errors** are shown in one place: a red notification with the API's message. Forms that put errors next to their fields (sign-in and sign-up) set `meta: { inlineErrors: true }` and skip it.
+- **Expired sessions:** a 401 from any query (or any mutation without `inlineErrors`) removes all cached data and sets the session to signed out, which sends the user to `/login`.
+
+Compared with `useEffect` + `fetch` in each component, the query cache gives shared data between components, loading and error states, request de-duplication, cancellation and refetching for free.
+
+### The session
+
+`client/src/auth/useAuth.js` holds the session in the `['me']` query (`GET /api/auth/me`):
+- A 401 resolves the query to `null` ("not signed in") instead of an error, so it never triggers the global 401 handler.
+- Sign-in and sign-up return `{ user, organization }`, the same shape as `/me`, so `startSession` puts the response straight into the cache.
+- `startSession` and `endSession` both remove every other cached query first, so nothing loaded for one user is shown to the next one in the same tab.
+- `logout()` calls the API first and only clears the session when that succeeds. If the API can't be reached, the cookie would still be in the browser, so the app doesn't pretend the user signed out.
+- `isStaff` and `isAdmin` come from the role the API returned. The page never stores a role of its own.
+
+### Routes and guards
+
+| Path | Who |
+| --- | --- |
+| `/login`, `/register` | Public (a signed-in user is sent to `/tickets`) |
+| `/`, `/tickets`, `/tickets/new`, `/tickets/:id` | Signed in, inside `AppLayout` |
+| `/admin/users`, `/admin/categories`, `/admin/sla` | Admins |
+| anything else | 404 page, inside the shell |
+
+- `RequireAuth` shows a loader while `['me']` loads, an error with "Try again" if the API can't be reached, and otherwise redirects a signed-out visitor to `/login` with `state.from`, so signing in returns them to the page they asked for.
+- `RequireRole` shows a "You don't have access" message.
+- **Guards are only for a smooth experience.** Anyone can change the JavaScript in their own browser. The API checks the session and role on every request, so a bypassed guard only shows a page whose requests fail with 401 or 403.
+
+### Layout and styling
+
+- `AppLayout` is a Mantine `AppShell`: header with the brand, organization name, light/dark toggle and user menu (name, role, sign out); navbar with Tickets, New ticket and, for admins, an Admin section. Below the `sm` breakpoint the navbar collapses behind a burger button.
+- Colour scheme follows the operating system until the user picks one; Mantine remembers the choice in `localStorage`.
+- Labels and colours for statuses, priorities and roles live in `client/src/constants.js`, so every badge and select agrees.
+- Every component has the same layout: a header comment, then `State`, `Data`, `Handlers` and `Render` sections. Styling is Mantine props first, with a small CSS module beside a component when needed.
+
+### Sign-up form
+
+- The URL name (slug) is suggested from the organization name (`features/auth/slug.js`: lowercase, accents removed, other characters become hyphens, at most 50 characters) until the user edits it. Clearing it turns the suggestion back on.
+- The form checks the same rules as the API before sending. Sign-up is limited to 5 attempts per IP per hour and rejected attempts count, so a typo shouldn't use one up.
+- Field errors from the API (for example "That URL name is taken") appear under the matching input.
+
+### Tests
+
+Vitest with jsdom and React Testing Library (`client/src/**/*.test.js(x)`). `fetch` is replaced per test, so no API is needed. They cover the API client's error parsing, the slug generator, the route guards and admin navigation, signing in and returning to the requested page, and the sign-up form's slug and field errors.
+
 ## Deployment
