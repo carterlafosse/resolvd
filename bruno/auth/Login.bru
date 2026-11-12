@@ -1,0 +1,26 @@
+meta {
+  name: Login
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/auth/login
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "email": "{{email}}",
+    "password": "{{password}}"
+  }
+}
+
+docs {
+  Sets the resolvd_token cookie, which Bruno sends on later requests.
+  Seed logins: admin@acme.test, tech1@acme.test, user1@acme.test (and @globex.test),
+  all with SEED_PASSWORD from server/.env. Put it in the secret {{password}} variable
+  (Environments > local); it is never saved in this repo.
+  5 wrong passwords lock the account for 15 minutes; 10 attempts per IP per 15 minutes.
+}

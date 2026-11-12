@@ -1,0 +1,16 @@
+meta {
+  name: List users
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/users?active=true
+  body: none
+  auth: none
+}
+
+docs {
+  Technicians and admins. Admins get full records; technicians get id, name and role.
+  End users get 403. Filters: role=end_user|technician|admin, active=true|false.
+}

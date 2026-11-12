@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Resolvd API
-  version: 0.1.0
+  version: 0.2.0
   description: |
     Multi-organization IT helpdesk API. Each organization's data is isolated in every
     query and again by PostgreSQL row-level security.
@@ -16,7 +16,12 @@ info:
     | 400 | `VALIDATION_ERROR` | Input failed validation; `details` holds `formErrors` and `fieldErrors` |
     | 400 | `INVALID_REFERENCE` | A referenced record doesn't exist |
     | 400 | `INVALID_INPUT` | A value has the wrong format for the database |
+    | 400 | `INVALID_PASSWORD` | `PATCH /users/me`: the current password is wrong |
+    | 400 | `CANNOT_CHANGE_SELF` | An admin tried to demote or deactivate themselves |
+    | 400 | `LAST_ADMIN` | The change would leave the organization with no active admin |
     | 401 | `UNAUTHORIZED` | Not signed in, or the session expired |
+    | 401 | `INVALID_CREDENTIALS` | Login: wrong email or password |
+    | 401 | `ACCOUNT_LOCKED` | Login: too many failed attempts; try again in 15 minutes |
     | 403 | `FORBIDDEN` | Signed in, but your role can't do this |
     | 404 | `NOT_FOUND` | The route or record doesn't exist, or you can't see it |
     | 409 | `CONFLICT` | Duplicate value, or the record changed since you loaded it |
@@ -30,16 +35,341 @@ info:
     Every response carries an `X-Request-Id` header; quote it when reporting a problem.
 servers:
   - url: /api
+# Every endpoint needs the session cookie unless it says otherwise (security: []).
+security:
+  - cookieAuth: []
 tags:
   - name: Health
     description: Service status
+  - name: Auth
+    description: |
+      Sign-up, login and sessions. The session is a JWT in the `resolvd_token` cookie
+      (HttpOnly, SameSite=Lax, Secure in production, 8 hours). Browsers send it
+      automatically; there is no Authorization header.
+  - name: Users
+    description: User management (admins), the staff directory, and your own account
+  - name: Categories
+    description: Ticket categories for the signed-in user's organization
 paths:
+  /auth/register-organization:
+    post:
+      tags: [Auth]
+      summary: Create an organization and its first admin
+      description: |
+        Creates the organization, its admin user, the default categories and the default SLA
+        policies in one transaction, then signs the new admin in (sets the session cookie).
+        Any extra fields (such as `role`) are ignored.
+      operationId: registerOrganization
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [organizationName, slug, name, email, password]
+              properties:
+                organizationName: { type: string, minLength: 2, maxLength: 100 }
+                slug:
+                  type: string
+                  pattern: '^[a-z0-9-]{3,50}$'
+                  description: URL name, unique across Resolvd.
+                name: { type: string, minLength: 1, maxLength: 100 }
+                email: { type: string, format: email, description: Trimmed and lowercased. }
+                password: { $ref: '#/components/schemas/Password' }
+            example:
+              organizationName: Initech
+              slug: initech
+              name: Bill Lumbergh
+              email: bill@initech.test
+              password: YOUR_PASSWORD_1
+      responses:
+        '201':
+          description: Created and signed in.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SessionCookie'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '409':
+          description: The email is already registered, or the slug is taken.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error:
+                  code: CONFLICT
+                  message: That email is already registered
+                  details:
+                    formErrors: []
+                    fieldErrors: { email: [That email is already registered] }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Sign in
+      description: |
+        Sets the session cookie. An unknown email, an inactive account and a wrong password
+        all return the same 401. After 5 wrong passwords the account is locked for 15
+        minutes. Limited to 10 attempts per 15 minutes per IP.
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string }
+                password: { type: string }
+            example:
+              email: admin@acme.test
+              password: YOUR_SEED_PASSWORD
+      responses:
+        '200':
+          description: Signed in.
+          headers:
+            Set-Cookie:
+              $ref: '#/components/headers/SessionCookie'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401':
+          description: Wrong credentials (`INVALID_CREDENTIALS`) or a locked account (`ACCOUNT_LOCKED`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              examples:
+                invalid:
+                  value:
+                    error: { code: INVALID_CREDENTIALS, message: Invalid email or password }
+                locked:
+                  value:
+                    error:
+                      code: ACCOUNT_LOCKED
+                      message: Account temporarily locked. Try again later.
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Sign out
+      description: Clears the session cookie. Works without a session.
+      operationId: logout
+      security: []
+      responses:
+        '204':
+          description: Signed out.
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: The signed-in user and their organization
+      operationId: getMe
+      responses:
+        '200':
+          description: The current session.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Session' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /users:
+    get:
+      tags: [Users]
+      summary: List users in your organization
+      description: |
+        Technicians and admins. Admins get full user records; technicians get only
+        `id`, `name` and `role` (enough for an assignment dropdown). Sorted by name.
+      operationId: listUsers
+      parameters:
+        - name: role
+          in: query
+          schema: { $ref: '#/components/schemas/Role' }
+        - name: active
+          in: query
+          schema: { type: string, enum: ['true', 'false'] }
+      responses:
+        '200':
+          description: The users.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items:
+                      oneOf:
+                        - $ref: '#/components/schemas/User'
+                        - $ref: '#/components/schemas/UserSummary'
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Users]
+      summary: Create a user (admin)
+      description: The password is temporary; the user changes it with `PATCH /users/me`.
+      operationId: createUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, role, password]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                email: { type: string, format: email }
+                role: { $ref: '#/components/schemas/Role' }
+                department: { type: string, maxLength: 100, nullable: true }
+                password: { $ref: '#/components/schemas/Password' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /users/me:
+    patch:
+      tags: [Users]
+      summary: Update your own account
+      description: Any signed-in user. Changing the password requires `currentPassword`.
+      operationId: updateMe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                emailNotifications: { type: boolean }
+                currentPassword: { type: string }
+                newPassword: { $ref: '#/components/schemas/Password' }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400':
+          description: Invalid input, or the current password is wrong (`INVALID_PASSWORD`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /users/{id}:
+    patch:
+      tags: [Users]
+      summary: Update a user (admin)
+      description: |
+        Admins can't demote or deactivate themselves (`CANNOT_CHANGE_SELF`), and the
+        organization always keeps at least one active admin (`LAST_ADMIN`). Changes apply
+        on the user's next request.
+      operationId: updateUser
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              properties:
+                name: { type: string, minLength: 1, maxLength: 100 }
+                role: { $ref: '#/components/schemas/Role' }
+                department: { type: string, maxLength: 100, nullable: true }
+                isActive: { type: boolean }
+      responses:
+        '200':
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '400':
+          description: Invalid input, `CANNOT_CHANGE_SELF` or `LAST_ADMIN`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /categories:
+    get:
+      tags: [Categories]
+      summary: List categories
+      description: Any signed-in user. Sorted by name.
+      operationId: listCategories
+      responses:
+        '200':
+          description: The categories.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Category' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [Categories]
+      summary: Add a category (admin)
+      operationId: createCategory
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoryInput' }
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Category' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+  /categories/{id}:
+    patch:
+      tags: [Categories]
+      summary: Rename a category (admin)
+      operationId: renameCategory
+      parameters:
+        - $ref: '#/components/parameters/Id'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CategoryInput' }
+      responses:
+        '200':
+          description: Renamed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Category' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
   /health:
     get:
       tags: [Health]
       summary: Check the API and database
       description: Runs `SELECT 1` against the database. Used by Render's health check.
       operationId: getHealth
+      security: []
       responses:
         '200':
           description: The API is running and the database is reachable.
@@ -62,7 +392,78 @@ paths:
                 status: degraded
                 database: down
 components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: resolvd_token
+      description: Set by login or sign-up. In Swagger UI, sign in with POST /auth/login first.
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+  headers:
+    SessionCookie:
+      description: '`resolvd_token=<JWT>; Max-Age=28800; Path=/; HttpOnly; SameSite=Lax` (plus `Secure` in production)'
+      schema: { type: string }
   schemas:
+    Role:
+      type: string
+      enum: [end_user, technician, admin]
+    Password:
+      type: string
+      minLength: 10
+      maxLength: 72
+      description: 10 to 72 characters (at most 72 bytes), with at least one letter and one number.
+    User:
+      type: object
+      description: A user as admins and the user themselves see it. Never includes the password hash.
+      properties:
+        id: { type: integer }
+        organization_id: { type: integer }
+        name: { type: string }
+        email: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+        department: { type: string, nullable: true }
+        is_active: { type: boolean }
+        email_notifications: { type: boolean }
+        locked_until: { type: string, format: date-time, nullable: true }
+        last_login_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    UserSummary:
+      type: object
+      description: What technicians see when listing users.
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        role: { $ref: '#/components/schemas/Role' }
+    Organization:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        slug: { type: string }
+    Session:
+      type: object
+      properties:
+        user: { $ref: '#/components/schemas/User' }
+        organization: { $ref: '#/components/schemas/Organization' }
+    Category:
+      type: object
+      properties:
+        id: { type: integer }
+        organization_id: { type: integer }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CategoryInput:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
     Error:
       type: object
       required: [error]
@@ -98,6 +499,42 @@ components:
           type: string
           enum: [up, down]
   responses:
+    ValidationError:
+      description: The input failed validation.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error:
+              code: VALIDATION_ERROR
+              message: Validation failed
+              details:
+                formErrors: []
+                fieldErrors: { name: [Too small: expected string to have >=1 characters] }
+    Unauthorized:
+      description: Not signed in, or the session expired or is no longer valid.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: UNAUTHORIZED, message: Authentication required }
+    Forbidden:
+      description: Signed in, but your role can't do this.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: FORBIDDEN, message: You do not have permission to do that }
+    NotFound:
+      description: It doesn't exist, or it belongs to another organization.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: The value is already in use.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
     TooManyRequests:
       description: Rate limit reached.
       content:

@@ -17,10 +17,22 @@ Every request passes through this middleware, in order:
 5. `pino-http`: one log line per request, with a fresh UUID request id also returned in the `X-Request-Id` header. 4xx responses log as `warn`, 5xx as `error`.
 6. `express.json({ limit: '100kb' })` and `cookieParser()`.
 7. A general rate limit on `/api`: 300 requests per minute per IP.
-8. Routers (`/api/health` so far; later phases add authentication and feature modules).
+8. Routers: `/api/health`, `/api/auth`, `/api/users`, `/api/categories`. Inside a router, protected routes run `authenticate`, then `requireRole(...)`, then `validate(...)`, then the controller.
 9. `notFound`, then `errorHandler`.
 
-Feature code follows route → controller → service → queries. Services open `withOrg(orgId, work)` from `server/src/db/withOrg.js`: one transaction on one pooled connection, with `app.current_org_id` set transaction-locally. Every tenant query inside uses the `client` it's handed, because `pool.query` would run on another connection with no org set and RLS would hide every row.
+Feature code follows route → controller → service → queries.
+
+- **`validate({ body, query, params })`** (`server/src/middleware/validate.js`) parses each part with Zod. The parsed values replace `req.body` and `req.params`; the parsed query goes on `req.validatedQuery` because Express 5's `req.query` is read-only. Zod object schemas drop keys they don't list, so a client can't sneak `role` or `organization_id` into a request (mass assignment).
+- **Order matters:** `requireRole` runs before `validate`, so a caller without the role gets 403 whatever they send, rather than a validation error that would hint at the endpoint's shape.
+- **Controllers** only read the request, call one service function and send the response.
+- **Services** hold the rules (each service file lists them at the top) and open `withOrg`.
+- **Queries** are plain SQL functions that take `client` first. Every query filters on `organization_id = current_org_id()`, and inserts set `organization_id = current_org_id()` in SQL, so the org always comes from the transaction's setting and never from request data.
+- **Responses:** lists are `{ data: [...] }`; single records are the record itself; auth endpoints return `{ user, organization }`. Fields are snake_case as stored; request bodies are camelCase. Services open `withOrg(orgId, work)` from `server/src/db/withOrg.js`: one transaction on one pooled connection, with `app.current_org_id` set transaction-locally. Every tenant query inside uses the `client` it's handed, because `pool.query` would run on another connection with no org set and RLS would hide every row.
+
+`withTransaction` (which `withOrg` uses) also handles a connection that dies mid-transaction:
+- It rethrows the original error, not the failed `ROLLBACK`.
+- It tells the pool to destroy the client rather than reuse it.
+- While the client is checked out it listens for the client's `error` event. node-postgres only listens on idle clients, and an unhandled `error` on a checked-out client would crash the process.
 
 ### Errors
 
@@ -89,6 +101,59 @@ These run with the owner's rights, so they bypass RLS. Each does one narrow job 
 Besides primary keys and unique constraints: `users_email_lower_idx` (case-insensitive unique email), and on `tickets` the indexes `(organization_id, status)` and `(organization_id, assignee_id)` for queue filters. There is also a **partial** index on `(organization_id, resolution_due_at)` covering only tickets that aren't resolved or closed, because only open work has a deadline to check, so the index stays small. Comments and events are indexed on `(ticket_id, created_at)` for the activity feed.
 
 ## Security
+
+### Sessions
+
+Login and sign-up set a cookie named `resolvd_token` holding a JWT `{ sub: userId, org: orgId }` signed with `JWT_SECRET` (HS256, 8 hours). Both names are shared with ScreenGuide AI.
+
+| Cookie flag | Why |
+| --- | --- |
+| `httpOnly` | Page JavaScript can't read it, so an XSS bug can't steal the session (unlike a token in `localStorage`). |
+| `secure` (production) | Only sent over HTTPS. |
+| `sameSite: 'lax'` | Not sent on cross-site POST/PATCH requests, which blocks CSRF from other websites. Normal links into the app still carry it. |
+| `path: '/'`, `maxAge` 8 h | Matches the token's lifetime. Logout clears it with the same options, because browsers only delete a cookie when they match. |
+
+`authenticate` (`server/src/middleware/auth.js`) handles every protected request:
+1. It verifies the token, accepting only HS256.
+2. It loads the user **from the database** inside `withOrg(payload.org)`.
+3. It rejects the request with 401 if that user is missing or inactive.
+4. It sets `req.user = { id, orgId, role, name, email }`.
+
+The role is never read from the token. Demoting or deactivating someone therefore takes effect on their very next request, even though their cookie is still valid. The cost is one indexed lookup per request.
+
+`requireRole(...roles)` returns 403 when the role isn't allowed. It's used only where the caller can see the thing but can't act on it. Records in another org, or ones the caller isn't allowed to see, are 404, so their existence isn't revealed.
+
+### Login and lockout
+
+1. **Find the user.** `auth_find_user_by_email` (SECURITY DEFINER) runs on the pool, because the user's org isn't known yet.
+2. **Unknown email or inactive account:** `bcrypt.compare` still runs, against a dummy hash generated at startup, then the API returns 401 `INVALID_CREDENTIALS`. Every "no" takes about the same ~250 ms, so timing doesn't reveal which emails are registered.
+3. **Locked** (`locked_until` in the future): 401 `ACCOUNT_LOCKED`. This is checked before the password, so guesses made during the lock can never succeed.
+4. **Wrong password:** `auth_record_login_failure(id, 5, 15)` runs as its own autocommit statement, then 401 `INVALID_CREDENTIALS`. The fifth failure locks the account for 15 minutes and resets the counter.
+   - **Why it runs on its own:** if the counter were updated inside the transaction that then throws the 401, the rollback would undo it and the lockout would never trigger.
+5. **Correct password:** inside `withOrg`, reset the counter and lock, set `last_login_at`, and issue the cookie.
+
+Two limits work together:
+- The **per-account lockout** stops many IPs guessing one account.
+- The **per-IP login rate limit** (10 attempts per 15 minutes) stops one IP guessing across many accounts.
+
+### Passwords
+
+- Hashed with bcryptjs at cost 12.
+- Rules: 10 to 72 characters (and at most 72 bytes, because bcrypt ignores anything after that), with at least one letter and one number.
+- Login itself checks only that a password was sent; the rules are not revealed at login.
+- Hashing happens before a transaction opens, so slow bcrypt work doesn't hold a pooled connection.
+- `password_hash` is never selected into an API response: queries use an explicit column list.
+
+### Users and admins
+
+- Technicians can list users, but only see `id, name, role` (for assignment). Admins see full records.
+- An admin can't demote or deactivate themselves.
+- The org always keeps at least one active admin. Any change to a role or active flag first locks **every active admin row in id order** (`SELECT ... FOR UPDATE`), then the target row.
+  - **Why:** two admins demoting each other at the same moment must run one after the other, so the second sees the first's change and is refused (`LAST_ADMIN`).
+  - Locking only the target row wouldn't stop this, because each request would lock a different row.
+  - Locking in a fixed order means two requests can't deadlock.
+
+### Other protections
 
 - **Config fails fast.** `server/src/config/env.js` validates environment variables with Zod at startup and exits with a list of the bad keys (names and rules only, never values). `JWT_SECRET` must be at least 32 characters.
 - **No internals in responses.** Unexpected errors become a generic 500; details go only to the server log.

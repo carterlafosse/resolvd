@@ -1,0 +1,23 @@
+meta {
+  name: Update user
+  type: http
+  seq: 3
+}
+
+patch {
+  url: {{baseUrl}}/users/{{userId}}
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "department": "Field Support"
+  }
+}
+
+docs {
+  Admin only. Also accepts name, role and isActive. Set userId in the environment.
+  An admin cannot demote or deactivate themselves; the org keeps at least one active admin.
+  Another organization's user id gives 404.
+}

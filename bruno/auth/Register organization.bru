@@ -1,0 +1,27 @@
+meta {
+  name: Register organization
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{baseUrl}}/auth/register-organization
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "organizationName": "Initech",
+    "slug": "initech",
+    "name": "Bill Lumbergh",
+    "email": "bill@initech.test",
+    "password": "{{password}}"
+  }
+}
+
+docs {
+  Creates an org, its admin, default categories and SLA policies, and signs in (201).
+  Uses the secret {{password}} variable (10+ characters, a letter and a number).
+  Run it twice: the second time gives 409 (email already registered).
+}

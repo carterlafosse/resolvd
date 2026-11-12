@@ -1,0 +1,21 @@
+meta {
+  name: Create category
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/categories
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "Printers"
+  }
+}
+
+docs {
+  Admin only (201). A duplicate name in the same org gives 409.
+}

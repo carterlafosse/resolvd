@@ -1,0 +1,25 @@
+meta {
+  name: Create user
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/users
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "New Technician",
+    "email": "newtech@acme.test",
+    "role": "technician",
+    "department": "IT",
+    "password": "{{password}}"
+  }
+}
+
+docs {
+  Admin only (201). The password is temporary; the user changes it with Update my account.
+}

@@ -1,0 +1,21 @@
+meta {
+  name: Rename category
+  type: http
+  seq: 3
+}
+
+patch {
+  url: {{baseUrl}}/categories/{{categoryId}}
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "Hardware & Peripherals"
+  }
+}
+
+docs {
+  Admin only. Set categoryId in the environment. Another org's id gives 404.
+}

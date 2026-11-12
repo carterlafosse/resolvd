@@ -45,3 +45,23 @@ Choices made while building Resolvd that the build plan (`RESOLVD_PLAN.md`) did 
 - **Extra tests beyond the plan's two:** AppError helpers, each error-handler mapping (including Express 5 forwarding async errors, which replaces the temporary test route; that route was also tried by hand and removed), and the `withOrg` / `withTransaction` behaviour.
 - **OpenAPI `servers` is `/api`**, so paths are written as `/health` and Swagger's "Try it out" calls the same host that serves the docs.
 - **`.gitignore` un-ignores `.env.test.example`.** The `.env.*` rule was also hiding the new placeholder file. Real `.env.test` files stay ignored.
+
+## Phase 3: Authentication, roles and admin endpoints
+
+- **What "refactor transaction helpers" meant.** `withTransaction` keeps the original error if `ROLLBACK` fails, destroys a broken connection instead of returning it to the pool, and listens for `error` on the client while it's checked out. A test that kills its own connection showed that, without the listener, the late `ECONNRESET` was an unhandled error that would crash the server.
+- **Response shapes.** Register, login and `/me` all return `{ user, organization: { id, name, slug } }`, so the front end can use any of them to fill its `['me']` cache. Lists return `{ data: [...] }` (Phase 4 adds `pagination`). Single records are returned bare. Output fields stay snake_case as stored; request bodies are camelCase, as the plan's field names are.
+- **Error codes added.** `INVALID_CREDENTIALS` and `ACCOUNT_LOCKED` (401, login), `CANNOT_CHANGE_SELF` and `LAST_ADMIN` (400, user admin rules), `INVALID_PASSWORD` (400, wrong current password on `PATCH /users/me`; 400 not 401 so the front end doesn't treat it as a signed-out session). Business-rule refusals use 400 to match the plan's convention for workflow rules (Phase 5); `AppError.unprocessable` (422) stays unused for now.
+- **409s carry field errors.** Duplicate email, slug and category name return `details` in the same `{ formErrors, fieldErrors }` shape as validation errors, so a form can show the message under the right input. The `code` stays `CONFLICT`.
+- **Last-admin rule locks every active admin row in id order.** The plan says to lock the target row; that alone doesn't stop two admins demoting each other at once (each locks a different row). The test forces the overlap with a third connection holding the locks, and fails if the admin-row lock is removed.
+- **Inactive accounts also run bcrypt** against their own hash before the 401, like unknown emails, so timing doesn't distinguish them from a wrong password.
+- **Locked accounts are checked before the password** and answered without running bcrypt. The message already says the account is locked, so there's nothing to hide by timing.
+- **Passwords: 72-byte check as well as 72 characters.** bcrypt truncates at 72 bytes, and non-ASCII characters use more than one byte.
+- **`authenticate` rejects a token whose `sub` or `org` isn't an integer**, even with a valid signature. Missing cookie → `Authentication required`; bad, expired or no-longer-valid session → `Session expired. Please sign in again.` (both 401 `UNAUTHORIZED`).
+- **`POST /auth/logout` doesn't require a session**, so a client can always clear a stale cookie.
+- **Department can be cleared** by sending `null` or `""`.
+- **`users.queries.js` builds the `UPDATE ... SET` list from a whitelist map** (API field → column), so only those columns can appear and every value is a parameter. The users list uses fixed SQL with `($1::user_role IS NULL OR role = $1)`-style optional filters instead.
+- **Shared rate-limiter factory** (`src/middleware/rateLimit.js`) used by the general `/api` limiter and the login limiter, so both send 429s in the standard error shape with the same headers.
+- **Tests vary the client IP.** The app trusts one proxy hop, so tests set `X-Forwarded-For` to a fresh fake IP for each login. That keeps the real 10-per-15-minutes login limiter on in tests (it has its own test) without one file's logins tripping it.
+- **Pulled forward from Phase 9:** `tests/globalSetup.js` (migrate + seed `resolvd_test` once per run) and a minimal `tests/helpers.js` (`app`, `loginAs`, `createUser` via the owner connection with bcrypt cost 4 for speed). `seed()` gained a `table` option so the setup can silence its console table.
+- **Bruno:** passwords use a secret environment variable (`vars:secret [ password ]` in `bruno/environments/local.bru`). Bruno stores its value locally, never in the file.
+- **`.gitkeep` files left in `modules/auth` and `modules/users`.** They're now redundant next to real files but harmless.

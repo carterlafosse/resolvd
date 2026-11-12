@@ -1,0 +1,22 @@
+meta {
+  name: Update my account
+  type: http
+  seq: 4
+}
+
+patch {
+  url: {{baseUrl}}/users/me
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "name": "Avery Admin",
+    "emailNotifications": true
+  }
+}
+
+docs {
+  Any signed-in user. To change the password, send currentPassword and newPassword.
+}

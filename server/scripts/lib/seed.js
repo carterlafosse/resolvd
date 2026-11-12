@@ -11,7 +11,7 @@ const BCRYPT_COST = 12;
 
 export async function seed(
   connectionString,
-  { password = process.env.SEED_PASSWORD, log = console.log } = {},
+  { password = process.env.SEED_PASSWORD, log = console.log, table = console.table } = {},
 ) {
   if (!connectionString) {
     throw new Error('MIGRATION_DATABASE_URL is not set. Add it to server/.env (see .env.example).');
@@ -86,6 +86,6 @@ export async function seed(
 
   log(`Seeded ${Object.keys(SEED_ORGS).length} organizations and ${created.length} users.`);
   log('Every seed user signs in with SEED_PASSWORD from server/.env.');
-  console.table(created);
+  table(created);
   return created;
 }
