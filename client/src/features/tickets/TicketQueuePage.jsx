@@ -35,8 +35,18 @@ import {
 import { TicketCards } from './TicketCards.jsx';
 import classes from './TicketQueuePage.module.css';
 import { TicketTable } from './TicketTable.jsx';
+import { usePageTitle } from '../../usePageTitle.js';
 
 const SEARCH_DEBOUNCE_MS = 300;
+
+// The previous/next arrows are icon-only buttons, so screen readers need a name for them.
+const PAGINATION_LABELS = {
+  first: 'First page',
+  previous: 'Previous page',
+  next: 'Next page',
+  last: 'Last page',
+};
+const paginationControlProps = (control) => ({ 'aria-label': PAGINATION_LABELS[control] });
 
 const PRIORITY_OPTIONS = Object.entries(PRIORITIES).map(([value, { label }]) => ({
   value,
@@ -58,6 +68,7 @@ export function TicketQueuePage() {
   }
 
   // ----- Data -----
+  usePageTitle('Tickets');
   const { isStaff } = useAuth();
   const queue = readQueueState(searchParams, isStaff);
   const filters = toApiFilters(queue);
@@ -223,6 +234,7 @@ export function TicketQueuePage() {
               total={pagination.totalPages}
               value={pagination.page}
               onChange={handlePageChange}
+              getControlProps={paginationControlProps}
               size="sm"
             />
           )}

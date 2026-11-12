@@ -29,6 +29,7 @@ import {
   validateTitle,
 } from './ticketForm.js';
 import classes from './NewTicketPage.module.css';
+import { usePageTitle } from '../../usePageTitle.js';
 
 export function NewTicketPage() {
   // ----- State -----
@@ -39,6 +40,7 @@ export function NewTicketPage() {
   });
 
   // ----- Data -----
+  usePageTitle('New ticket');
   const queryClient = useQueryClient();
   const { isStaff } = useAuth();
   const categories = useQuery({

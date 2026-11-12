@@ -11,6 +11,7 @@ import { ActivityFeed } from './ActivityFeed.jsx';
 import { CommentBox } from './CommentBox.jsx';
 import { TicketHeader } from './TicketHeader.jsx';
 import { TicketSidebar } from './TicketSidebar.jsx';
+import { usePageTitle } from '../../usePageTitle.js';
 
 // 404 is "doesn't exist or you can't see it" (the API doesn't say which). 400 means the id in
 // the address isn't a valid ticket id, which to the user is the same thing.
@@ -33,6 +34,10 @@ export function TicketDetailPage() {
     queryFn: ({ signal }) => getActivity(id, { signal }),
     enabled: ticket.isSuccess,
   });
+  // The tab shows the ticket number ("RES-1042 · Resolvd") once it has loaded.
+  usePageTitle(
+    ticket.data?.display_id ?? (isMissing(ticket.error) ? 'Ticket not found' : 'Ticket'),
+  );
 
   // ----- Handlers -----
   const handleReload = () => queryClient.invalidateQueries({ queryKey: ticketKeys.detail(id) });

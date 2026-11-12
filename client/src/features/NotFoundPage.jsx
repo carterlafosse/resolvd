@@ -1,13 +1,14 @@
 // 404 page for any address the app doesn't have.
 import { Button, Center, Stack, Text, Title } from '@mantine/core';
 import { Link } from 'react-router-dom';
+import { usePageTitle } from '../usePageTitle.js';
 
 export function NotFoundPage() {
   // ----- State -----
   // none
 
   // ----- Data -----
-  // none
+  usePageTitle('Page not found');
 
   // ----- Handlers -----
   // none

@@ -9,6 +9,7 @@ import { PageHeader } from '../../components/PageHeader.jsx';
 import classes from './AdminCategoriesPage.module.css';
 import { CATEGORY_NAME_MAX, validateCategoryName } from './categoryName.js';
 import { CategoryRow } from './CategoryRow.jsx';
+import { usePageTitle } from '../../usePageTitle.js';
 
 export function AdminCategoriesPage() {
   // ----- State -----
@@ -18,6 +19,7 @@ export function AdminCategoriesPage() {
   });
 
   // ----- Data -----
+  usePageTitle('Categories');
   const queryClient = useQueryClient();
   const categories = useQuery({
     queryKey: categoryKeys.all,

@@ -6,12 +6,14 @@ import { listSlaPolicies, slaKeys } from '../../api/sla.js';
 import { PageHeader } from '../../components/PageHeader.jsx';
 import classes from './AdminSlaPage.module.css';
 import { SlaPolicyRow } from './SlaPolicyRow.jsx';
+import { usePageTitle } from '../../usePageTitle.js';
 
 export function AdminSlaPage() {
   // ----- State -----
   // none
 
   // ----- Data -----
+  usePageTitle('SLA policies');
   const policies = useQuery({
     queryKey: slaKeys.all,
     queryFn: ({ signal }) => listSlaPolicies({ signal }),

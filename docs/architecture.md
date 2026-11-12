@@ -348,8 +348,40 @@ Compared with `useEffect` + `fetch` in each component, the query cache gives sha
 - The form checks the same rules as the API before sending. Sign-up is limited to 5 attempts per IP per hour and rejected attempts count, so a typo shouldn't use one up.
 - Field errors from the API (for example "That URL name is taken") appear under the matching input.
 
+### Ticket queue
+
+`features/tickets/TicketQueuePage.jsx`, with the filter rules as pure functions in `queueFilters.js`.
+- **Filters live in the URL** (`tab`, `status`, `priority`, `q`, `sort`, `order`, `page`, read with `useSearchParams`). A view can be bookmarked or shared, the back button undoes a filter change, and a refresh keeps the view. The URL is the only copy of the filters, so the page can't show one thing while requesting another. Unknown values fall back to the defaults, and any change except paging returns to page 1.
+- **Tabs** are fixed views. Staff: My tickets, Unassigned, All open, Breached (each showing active statuses: open, in progress, on hold) and All tickets. End users: Open (including resolved, waiting for their confirmation) and Closed. The status filter narrows the tab's statuses.
+- **Search** updates the box immediately and the URL 300 ms after typing stops (`useDebouncedCallback`), so typing "printer" sends one request, not seven.
+- **Default sort:** staff by resolution deadline, soonest first; end users newest first. Sortable headers are the columns the API can sort.
+- **`keepPreviousData`** keeps the current page on screen while the next one loads; skeletons only show on the first load.
+- Below the `md` breakpoint the table becomes a list of cards, each one a single link.
+
+### Ticket page
+
+`TicketDetailPage` loads `GET /tickets/:id` and then `/activity`, and is made of `TicketHeader`, `ActivityFeed`, `CommentBox` and `TicketSidebar`.
+- **Options come from the API.** The status select lists only `allowedTransitions`; end users on a resolved ticket get "Yes, it's fixed" and "Still having this issue" instead. Edit appears only with `canEdit`, and the reply box is disabled without `canComment`. The workflow rules live in one place (the API), so the page can't offer a move the API would refuse.
+- **After any change, `invalidateQueries(['tickets'])`** marks every ticket query stale and refetches the ones on screen: the ticket (new status, deadlines and allowed actions), its activity feed and any queue. `useTicketMutation` does this for every ticket mutation and waits for the refetch before the control is usable again.
+- **Edit conflicts:** the edit form sends the `updated_at` from when editing started as `expectedUpdatedAt`. A 409 shows "This ticket was changed by someone else" with a Reload button.
+- Internal notes are yellow cards marked "Internal"; events are one-line sentences (`activityText.js`).
+- A missing ticket (404, or 400 for a malformed id) shows a "Ticket not found" page.
+
+### Admin pages
+
+- **Users:** a table with a role select and an active switch per row, and an Add user modal. Your own row is locked (the API refuses self-demotion anyway). The API's errors, such as removing the last admin, appear as notifications, and the controls always show the saved value.
+- **Categories:** add at the top, rename inline (Enter saves, Escape cancels).
+- **SLA policies:** one row per priority, entered in hours or days and saved as minutes. The page notes that changes apply to new tickets and to priority changes, because deadlines are stored on each ticket.
+
+### Polish
+
+- Every page sets the tab title with `usePageTitle` ("RES-1042 · Resolvd").
+- Icon-only buttons have an `aria-label` (theme toggle, menu, rename, save and cancel, pagination arrows).
+- Relative dates ("3 hours ago") show the full date in a tooltip (`components/RelativeTime.jsx`).
+- Custom colours use `light-dark()` in CSS modules, so internal notes, hover states and dividers work in both colour schemes.
+
 ### Tests
 
-Vitest with jsdom and React Testing Library (`client/src/**/*.test.js(x)`). `fetch` is replaced per test, so no API is needed. They cover the API client's error parsing, the slug generator, the route guards and admin navigation, signing in and returning to the requested page, and the sign-up form's slug and field errors.
+Vitest with jsdom and React Testing Library (`client/src/**/*.test.js(x)`). `fetch` is replaced per test, so no API is needed. They cover the API client's error parsing, the slug generator, the route guards and admin navigation, signing in and returning to the requested page, the sign-up form, the badges and SLA wording, the queue filters and the requests the queue sends, the new ticket form, the ticket page (allowed actions, internal notes, closed tickets, the 409 reload), the activity sentences, and the admin pages.
 
 ## Deployment

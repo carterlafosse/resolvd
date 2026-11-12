@@ -58,6 +58,7 @@ describe('TicketQueuePage', () => {
     expect(url.searchParams.get('sort')).toBe('resolution_due_at');
     expect(url.searchParams.get('order')).toBe('asc');
     expect(screen.getByText('Showing 1 to 1 of 1')).toBeTruthy();
+    expect(document.title).toBe('Tickets · Resolvd');
   });
 
   it('switches tab and asks for the unassigned tickets', async () => {

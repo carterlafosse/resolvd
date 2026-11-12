@@ -1,0 +1,5 @@
+/* Styles for the sign-in page: line up the info icon with the cold-start note beside it. */
+
+.coldStartIcon {
+  vertical-align: text-bottom;
+}

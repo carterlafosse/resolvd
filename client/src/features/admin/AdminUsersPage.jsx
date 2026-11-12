@@ -20,6 +20,7 @@ import { PageHeader } from '../../components/PageHeader.jsx';
 import { RelativeTime } from '../../components/RelativeTime.jsx';
 import { ROLES } from '../../constants.js';
 import { AddUserModal } from './AddUserModal.jsx';
+import { usePageTitle } from '../../usePageTitle.js';
 
 const ROLE_OPTIONS = Object.entries(ROLES).map(([value, { label }]) => ({ value, label }));
 const ALL_USERS = {};
@@ -31,6 +32,7 @@ export function AdminUsersPage() {
   const [addOpened, { open: openAdd, close: closeAdd }] = useDisclosure(false);
 
   // ----- Data -----
+  usePageTitle('Users');
   const queryClient = useQueryClient();
   const { user: me } = useAuth();
   const users = useQuery({

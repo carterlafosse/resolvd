@@ -10,6 +10,7 @@ import { startSession, useAuth } from '../../auth/useAuth.js';
 import { AuthShell } from './AuthShell.jsx';
 import { validateEmail, validatePassword } from './passwordRules.js';
 import { SLUG_PATTERN, slugify } from './slug.js';
+import { usePageTitle } from '../../usePageTitle.js';
 
 // The same limits as the API's registerOrgSchema. Checking here first matters because the API
 // allows only 5 sign-up attempts per hour, and rejected ones count.
@@ -41,6 +42,7 @@ export function RegisterPage() {
   });
 
   // ----- Data -----
+  usePageTitle('Create your organization');
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const signUp = useMutation({

@@ -96,6 +96,7 @@ describe('TicketDetailPage', () => {
     expect(screen.getByText('Internal')).toBeTruthy();
     expect(screen.getByText(/Pat Example created the ticket/)).toBeTruthy();
     expect(screen.getByLabelText('Internal note')).toBeTruthy();
+    expect(document.title).toBe('RES-1042 · Resolvd');
   });
 
   it('lets the requester confirm a resolved ticket, using the allowed moves from the API', async () => {

@@ -7,6 +7,8 @@ import { Link, Navigate, useLocation } from 'react-router-dom';
 import { login } from '../../api/auth.js';
 import { startSession, useAuth } from '../../auth/useAuth.js';
 import { AuthShell } from './AuthShell.jsx';
+import classes from './LoginPage.module.css';
+import { usePageTitle } from '../../usePageTitle.js';
 
 // Filled in when the public demo goes live (Phase 10): { role, email } for each demo account.
 const DEMO_LOGINS = [];
@@ -32,6 +34,7 @@ export function LoginPage() {
   });
 
   // ----- Data -----
+  usePageTitle('Sign in');
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const signIn = useMutation({
@@ -107,8 +110,8 @@ export function LoginPage() {
 
           {/* The API is on a free Render plan that sleeps when idle. */}
           <Text size="xs" c="dimmed" ta="center">
-            <IconInfoCircle size={14} style={{ verticalAlign: 'text-bottom' }} /> The first sign-in
-            can take up to a minute while the server wakes up.
+            <IconInfoCircle size={14} className={classes.coldStartIcon} aria-hidden /> The first
+            sign-in can take up to a minute while the server wakes up.
           </Text>
         </Stack>
       </form>
