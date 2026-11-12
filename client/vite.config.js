@@ -12,4 +12,9 @@ export default defineConfig({
       '/api': 'http://localhost:4000',
     },
   },
+  test: {
+    // A browser-like DOM for React Testing Library.
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.js'],
+  },
 });
