@@ -1,0 +1,62 @@
+// Builds the Express app (middleware, routers, error handling) without listening, so tests can use it.
+import { randomUUID } from 'node:crypto';
+import cookieParser from 'cookie-parser';
+import cors from 'cors';
+import express from 'express';
+import rateLimit from 'express-rate-limit';
+import helmet from 'helmet';
+import { pinoHttp } from 'pino-http';
+import { env } from './config/env.js';
+import { errorHandler } from './middleware/errorHandler.js';
+import { notFound } from './middleware/notFound.js';
+import { AppError } from './utils/AppError.js';
+import { logger } from './utils/logger.js';
+
+export function createApp() {
+  const app = express();
+
+  // One proxy (Render's load balancer) sits in front of the API in production. Trusting it
+  // makes req.ip the real client IP (from X-Forwarded-For), which rate limiting depends on.
+  app.set('trust proxy', 1);
+
+  app.use(helmet());
+  app.use(cors({ origin: env.CLIENT_ORIGIN, credentials: true }));
+
+  app.use(
+    pinoHttp({
+      logger,
+      // A fresh id per request ties together every log line for it, and the response header
+      // lets someone reporting a problem quote the id.
+      genReqId: (req, res) => {
+        const id = randomUUID();
+        res.setHeader('X-Request-Id', id);
+        return id;
+      },
+      customLogLevel: (req, res, err) => {
+        if (err || res.statusCode >= 500) return 'error';
+        if (res.statusCode >= 400) return 'warn';
+        return 'info';
+      },
+    }),
+  );
+
+  app.use(express.json({ limit: '100kb' }));
+  app.use(cookieParser());
+
+  app.use(
+    '/api',
+    rateLimit({
+      windowMs: 60 * 1000,
+      limit: 300,
+      standardHeaders: 'draft-8',
+      legacyHeaders: false,
+      // Send 429s through the error handler so they share the standard error shape.
+      handler: (req, res, next) => next(AppError.tooManyRequests()),
+    }),
+  );
+
+  app.use(notFound);
+  app.use(errorHandler);
+
+  return app;
+}
