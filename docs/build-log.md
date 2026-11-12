@@ -126,3 +126,32 @@
 
 **Next:**
 - Phase 4: tickets API (issue #6)
+
+## 2026-11-12 (Phase 4: tickets API)
+
+**Did:**
+- Claude Code built the tickets API: create, list (filters, search, sorting, pagination), get and update, with per-org ticket numbers, role-based visibility, change events and optimistic locking (227 tests total)
+- It also applied three follow-ups from the ScreenGuide compatibility check: `setOrg` rejects invalid org ids, sign-up is limited to 5 per hour per IP, and a wrong comment in `AppError.js` was fixed
+- I asked it to fix a bug it found: very large ids like `/api/users/99999999999` returned a 500. It wrote failing tests first, then fixed it with one shared id schema used by every module
+- Tested in Bruno: created RES-1001 and RES-1002 as a technician, tried filters, search and pagination, and confirmed an end user gets a 404 for a ticket they didn't create
+
+**Problems:**
+- Bruno saved my edited Login request into the collection file. `git status` caught it before committing, and `git restore` put it back. From now on I'll change accounts through the environment variables instead of the request body
+
+**Learned:**
+- A huge number in a URL can crash a query if it's bigger than the database's INT type, so ids need an upper limit in validation, not just "positive integer"
+- Writing the test first and watching it fail proves the bug is real and that the fix is what solved it
+- Bruno variables (`{{email}}`, `{{password}}`) keep requests reusable and keep secrets out of committed files
+
+**Concept checks:**
+- How does the list query stay safe from SQL injection when the SQL is built dynamically?
+    - User input never goes into the SQL text. Every value goes into a parameter array and is sent separately as `$1`, `$2` and so on, so the database treats it as data, never as SQL. Sort columns can't be parameters, so they come from a whitelist, and anything else fails validation with a 400
+- Why 404 instead of 403 for someone else's ticket?
+    - A 403 would confirm the ticket exists, so someone could probe ticket ids to learn about other people's tickets. A 404 gives away nothing
+- Why claim ticket numbers with one `UPDATE ... RETURNING` instead of `SELECT` then `UPDATE`?
+    - With two steps, two requests at the same moment could both read the same number and create duplicates. A single `UPDATE` locks the organization's row until the transaction commits, so the second request waits and gets the next number. Creating 5 tickets in parallel gave 1001 to 1005 with no duplicates
+- What does `COUNT(*) OVER()` give you?
+    - It's a window function that adds the total number of matching rows to every row, before `LIMIT` cuts it down to one page. One query gives both the page of tickets and the total needed for pagination
+
+**Next:**
+- Phase 5: workflow, assignment, comments and audit log (issue #7)
