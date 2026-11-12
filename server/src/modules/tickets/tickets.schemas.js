@@ -44,6 +44,12 @@ export const updateTicketSchema = z
 // PATCH /tickets/:id/status. Whether the move is allowed is the workflow's decision, not the schema's.
 export const changeStatusSchema = z.object({ status: statusSchema });
 
+// PATCH /tickets/:id/assignment. assigneeId is required: a user id, or null to unassign.
+export const assignmentSchema = z.object({ assigneeId: idValue.nullable() });
+
+// PATCH /tickets/:id/priority
+export const changePrioritySchema = z.object({ priority: prioritySchema });
+
 // "open,in_progress" -> ['open', 'in_progress'], each checked against the enum.
 function commaList(itemSchema) {
   return z

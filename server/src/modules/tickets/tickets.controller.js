@@ -20,3 +20,15 @@ export async function update(req, res) {
 export async function changeStatus(req, res) {
   res.json(await ticketsService.changeStatus(req.user, req.params.id, req.body));
 }
+
+export async function assign(req, res) {
+  res.json(await ticketsService.assignTicket(req.user, req.params.id, req.body.assigneeId));
+}
+
+export async function assignToMe(req, res) {
+  res.json(await ticketsService.assignTicket(req.user, req.params.id, req.user.id));
+}
+
+export async function changePriority(req, res) {
+  res.json(await ticketsService.changePriority(req.user, req.params.id, req.body));
+}

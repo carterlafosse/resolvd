@@ -99,6 +99,20 @@ export async function lockTicket(client, id) {
   return rows[0] ?? null;
 }
 
+// The user, if they can be given tickets: an active technician or admin in this org.
+// FOR SHARE stops the user being deactivated or demoted until this transaction commits, so a
+// ticket can't end up assigned to someone who stopped being assignable a moment earlier.
+export async function findAssignableUser(client, userId) {
+  const { rows } = await client.query(
+    `SELECT id, name FROM users
+     WHERE id = $1 AND organization_id = current_org_id()
+       AND is_active AND role IN ('technician', 'admin')
+     FOR SHARE`,
+    [userId],
+  );
+  return rows[0] ?? null;
+}
+
 // Field name -> column. Only these columns can ever appear in the SET clause; values are
 // always parameters. The service decides which fields a request may change; a value of
 // null clears the column, undefined leaves it alone.

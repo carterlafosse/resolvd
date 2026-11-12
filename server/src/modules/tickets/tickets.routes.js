@@ -1,9 +1,12 @@
 // Routes under /api/tickets: any signed-in user; the service decides what each role may see and do.
 import { Router } from 'express';
-import { authenticate } from '../../middleware/auth.js';
+import { authenticate, requireRole } from '../../middleware/auth.js';
 import { validate } from '../../middleware/validate.js';
 import * as controller from './tickets.controller.js';
+import { STAFF_ROLES } from './workflow.js';
 import {
+  assignmentSchema,
+  changePrioritySchema,
   changeStatusSchema,
   createTicketSchema,
   listTicketsQuery,
@@ -30,4 +33,26 @@ ticketsRouter.patch(
   '/:id/status',
   validate({ params: ticketIdParams, body: changeStatusSchema }),
   controller.changeStatus,
+);
+
+// Staff only. requireRole runs before validate, so an end user gets 403 whatever they send.
+const staffOnly = requireRole(...STAFF_ROLES);
+
+ticketsRouter.patch(
+  '/:id/assignment',
+  staffOnly,
+  validate({ params: ticketIdParams, body: assignmentSchema }),
+  controller.assign,
+);
+ticketsRouter.post(
+  '/:id/assign-to-me',
+  staffOnly,
+  validate({ params: ticketIdParams }),
+  controller.assignToMe,
+);
+ticketsRouter.patch(
+  '/:id/priority',
+  staffOnly,
+  validate({ params: ticketIdParams, body: changePrioritySchema }),
+  controller.changePriority,
 );

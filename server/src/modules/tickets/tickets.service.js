@@ -22,6 +22,11 @@ import { canTransition, isStaff, statusChangeEffects } from './workflow.js';
 // - Status changes follow the workflow in workflow.js (who may move a ticket from which
 //   status to which). A refused move is 400 INVALID_TRANSITION with the workflow's reason.
 //   Resolving sets resolved_at, reopening a resolved ticket clears it, closing sets closed_at.
+// - Only staff assign tickets and change priority (the routes return 403 to end users).
+//   The assignee must be an active technician or admin in the org (400 otherwise). The
+//   assignee event stores names ("Unassigned" for none). Assigning an open ticket moves it
+//   to in_progress and writes that status event too.
+// - Nothing about a closed ticket can change (400 TICKET_CLOSED).
 // - Every write locks the ticket row first (loadTicketForUpdate), so concurrent changes to one
 //   ticket run one after another and their events form one consistent history.
 
@@ -122,15 +127,15 @@ export function getTicket(user, ticketId) {
   });
 }
 
+// Closed is final: nobody edits, assigns, reprioritizes or comments on a closed ticket.
+// Shared by every write path; each passes the message that fits its action.
+export function assertNotClosed(ticket, message = "This ticket is closed and can't be changed") {
+  if (ticket.status === 'closed') throw AppError.badRequest(message, undefined, 'TICKET_CLOSED');
+}
+
 // Who may edit this ticket's details right now (the ticket is already known to be visible).
 function assertCanEdit(user, ticket) {
-  if (ticket.status === 'closed') {
-    throw AppError.badRequest(
-      "This ticket is closed and can't be edited",
-      undefined,
-      'TICKET_CLOSED',
-    );
-  }
+  assertNotClosed(ticket, "This ticket is closed and can't be edited");
   // 403, not 404: the requester can see the ticket, they just can't edit it at this stage.
   if (!isStaff(user) && ticket.status !== 'open') {
     throw AppError.forbidden(
@@ -232,6 +237,76 @@ export function changeStatus(user, ticketId, { status }) {
     if (!check.ok) throw AppError.badRequest(check.reason, undefined, 'INVALID_TRANSITION');
 
     await writeStatusChange(client, { ticket, to: status, actorId: user.id, now });
+    return queries.findTicketById(client, ticketId);
+  });
+}
+
+// Assignment events record names, not ids, so the history still reads correctly after a
+// user is renamed and needs no lookup to display.
+const UNASSIGNED = 'Unassigned';
+
+// PATCH /api/tickets/:id/assignment and POST /api/tickets/:id/assign-to-me (staff only; the
+// route checks the role). assigneeId null unassigns.
+export function assignTicket(user, ticketId, assigneeId) {
+  return withOrg(user.orgId, async (client) => {
+    const ticket = await loadTicketForUpdate(client, user, ticketId);
+    assertNotClosed(ticket);
+
+    // Assigning to the current assignee is not a change: no event, no status move.
+    if (assigneeId === ticket.assignee_id) return queries.findTicketById(client, ticketId);
+
+    let assigneeName = UNASSIGNED;
+    if (assigneeId !== null) {
+      const assignee = await queries.findAssignableUser(client, assigneeId);
+      if (!assignee) {
+        const message = 'Tickets can only be assigned to an active technician or admin';
+        throw AppError.validation(message, fieldError('assigneeId', message));
+      }
+      assigneeName = assignee.name;
+    }
+
+    await queries.updateTicket(client, ticketId, { assigneeId });
+    await queries.insertEvent(client, {
+      ticketId,
+      actorId: user.id,
+      field: 'assignee',
+      oldValue: ticket.assignee_name ?? UNASSIGNED,
+      newValue: assigneeName,
+    });
+
+    // Someone now owns a ticket nobody had started, so the work has begun. open ->
+    // in_progress is a staff move in the workflow, and only staff reach this service.
+    if (assigneeId !== null && ticket.status === 'open') {
+      await writeStatusChange(client, {
+        ticket,
+        to: 'in_progress',
+        actorId: user.id,
+        now: new Date(),
+      });
+    }
+
+    return queries.findTicketById(client, ticketId);
+  });
+}
+
+// PATCH /api/tickets/:id/priority (staff only; the route checks the role).
+// Phase 6 recalculates the SLA deadlines here.
+export function changePriority(user, ticketId, { priority }) {
+  return withOrg(user.orgId, async (client) => {
+    const ticket = await loadTicketForUpdate(client, user, ticketId);
+    assertNotClosed(ticket);
+
+    if (priority !== ticket.priority) {
+      await queries.updateTicket(client, ticketId, { priority });
+      await queries.insertEvent(client, {
+        ticketId,
+        actorId: user.id,
+        field: 'priority',
+        oldValue: ticket.priority,
+        newValue: priority,
+      });
+    }
+
     return queries.findTicketById(client, ticketId);
   });
 }
