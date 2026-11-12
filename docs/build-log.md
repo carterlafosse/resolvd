@@ -215,3 +215,36 @@
 
 **Next:**
 - Phase 7: front end foundation (issue #9)
+
+## 2026-11-12 (Phase 7: front end foundation)
+
+**Did:**
+- Claude Code built the React front end: Vite, Mantine (indigo theme with light and dark mode), React Router and TanStack Query, plus sign-in and sign-up pages, route guards, and an app shell with navigation, a user menu and a mobile burger menu (27 client tests)
+- Ran the API and the front end together for the first time, in two terminals
+- Checked in the browser:
+    - signed in as an end user, technician and admin; only the admin sees the Admin section
+    - stayed signed in after a refresh
+    - got a friendly no-access page visiting `/admin/users` as an end user
+    - registered an org; the URL name filled in automatically, and a taken name showed its error under that field
+    - checked dark mode and phone width
+- Checked that `LoginPage.jsx` follows my component structure (header comment, then State, Data, Handlers and Render)
+- Ran lint, tests and a production build, and took the sign-in screenshot
+
+**Problems:**
+- Ran `npm run build` in `server` by mistake. Only the client has a build step, because Vite bundles the React code for the browser and the server runs Node directly
+- Spotted one inline style in `LoginPage.jsx`. My convention is CSS modules beside the component, so I'll have it fixed in Phase 8
+
+**Learned:**
+- The front end and the API are separate apps. The React app calls the same endpoints I tested in Bruno
+- Vite warns about bundles over 500 kB. Mine is 175 kB gzipped, which loads fine, and code-splitting can shrink it later
+
+**Concept checks:**
+- Why does the Vite proxy matter for cookies?
+    - The front end runs on port 5173 and the API on 4000, which the browser treats as different sites, so it limits cross-site cookies. The proxy forwards `/api` requests from 5173 to 4000, so the browser only ever talks to one origin and the login cookie works normally. In production, a Vercel rewrite does the same job
+- What does TanStack Query handle that `useEffect` fetching doesn't?
+    - Caching, loading and error states, retries, and refetching. It also keeps every component showing the same data in sync. With `useEffect`, I'd write all of that by hand in every component
+- Why aren't front-end route guards real security?
+    - Anyone can change the JavaScript running in their own browser, or skip the front end and call the API directly (like I did with Bruno). The guards only decide what pages to show. The real security is the API's `authenticate` and `requireRole` checks and row-level security in the database
+
+**Next:**
+- Phase 8: ticket pages and admin screens (issue #10)
