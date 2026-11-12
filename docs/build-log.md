@@ -97,3 +97,32 @@
 
 **Next:**
 - Phase 3: authentication, roles and admin endpoints (issue #5)
+
+## 2026-11-12 (Phase 3: authentication, roles and admin endpoints)
+
+**Did:**
+- Claude Code built organization sign-up, login with account lockout, cookie sessions, `/me` and logout, role checks, and the users and categories admin endpoints, with 59 new tests (88 total)
+- Tested it by hand in Bruno: registered an org, logged in, called `/me`, logged out (401 afterwards), triggered the lockout, and got a 403 listing users as an end user
+- Confirmed the lockout in pgAdmin by checking `locked_until`
+
+**Problems:**
+- My first lockout test didn't lock anything because I wrapped the email in curly braces (`{carter@test.local}`). The API treated it as an unknown email, so no account was counted. That's actually the identical-response design working
+- I hit the 10-per-IP login rate limit (429) during testing. Restarting the dev server reset it, since the limiter lives in memory
+
+**Learned:**
+- Lockout (per account, 5 tries) and rate limiting (per IP, 10 tries) are separate protections against different attacks
+- Locking only one row can't stop two admins demoting each other at the same time, so the last-admin check locks every admin row in a fixed order
+- Claude Code proved that lock works by removing it, watching the test fail, then restoring it
+
+**Concept checks:**
+- Why is the session in an httpOnly cookie instead of localStorage?
+    - JavaScript can't read an httpOnly cookie, so if a cross-site scripting bug ever got into the page, the attacker's script couldn't steal the session. Anything in localStorage can be read by any script on the page
+- Why does `authenticate` load the user from the database on every request?
+    - So changes take effect immediately. If the role or active status came from the token, a deactivated or demoted user would keep their access until the token expired, up to 8 hours
+- Why do "unknown email" and "wrong password" return the same response?
+    - Different messages would let an attacker find out which emails have accounts. The dummy password check also makes both cases take the same time, so they can't be told apart by timing
+- Why would the failed-attempt counter be lost if it were updated inside the same transaction that throws the login error?
+    - Throwing the 401 inside the transaction triggers a rollback, which undoes every change in it, including the counter update. The counter never goes up and the account never locks. Running the update as its own statement saves it before the error is thrown
+
+**Next:**
+- Phase 4: tickets API (issue #6)
