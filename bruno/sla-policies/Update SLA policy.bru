@@ -1,0 +1,24 @@
+meta {
+  name: Update SLA policy
+  type: http
+  seq: 2
+}
+
+put {
+  url: {{baseUrl}}/sla-policies/critical
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "responseMinutes": 30,
+    "resolutionMinutes": 240
+  }
+}
+
+docs {
+  Admin only. The priority goes in the path: low, medium, high or critical.
+  Whole minutes from 5 to 129600 (90 days); the response must be shorter than the resolution.
+  Applies to tickets created afterwards and to later priority changes, not existing deadlines.
+}

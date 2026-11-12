@@ -1,0 +1,17 @@
+meta {
+  name: List SLA policies
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/sla-policies
+  body: none
+  auth: none
+}
+
+docs {
+  Staff only (technicians and admins). The org's four policies, critical first.
+  Minutes from ticket creation: response_minutes for the first public reply,
+  resolution_minutes for resolving.
+}

@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Resolvd API
-  version: 0.4.0
+  version: 0.5.0
   description: |
     Multi-organization IT helpdesk API. Each organization's data is isolated in every
     query and again by PostgreSQL row-level security.
@@ -60,6 +60,12 @@ tags:
     description: |
       Public replies and internal staff notes on a ticket. Visible to anyone who can see the
       ticket, except internal notes, which only staff receive.
+  - name: SLA policies
+    description: |
+      Each organization's response and resolution times per priority. A new ticket's
+      deadlines are counted from its `created_at` using the policy for its priority, in 24/7
+      calendar time, and stored on the ticket. Editing a policy affects tickets created
+      afterwards and later priority changes, never existing deadlines.
 paths:
   /auth/register-organization:
     post:
@@ -406,7 +412,10 @@ paths:
           schema: { type: string, maxLength: 100 }
         - name: sla
           in: query
-          description: Accepted now and applied from Phase 6, when tickets get SLA deadlines.
+          description: |
+            `breached`: a clock missed its deadline (including a ticket resolved late).
+            `at_risk`: nothing breached, but a running clock has less than 25% of its window
+            left. Each returns exactly the tickets whose `sla.overall` has that value.
           schema: { type: string, enum: [breached, at_risk] }
         - name: sort
           in: query
@@ -567,7 +576,8 @@ paths:
         `INVALID_TRANSITION` with the reason in `message`.
 
         Resolving sets `resolved_at`; reopening a resolved ticket clears it; closing sets
-        `closed_at`. Writes a `status` event.
+        `closed_at`. Writes a `status` event. Resolving also sets `first_response_at` if no
+        public staff reply came first (it stops the response SLA clock).
       operationId: changeTicketStatus
       parameters:
         - $ref: '#/components/parameters/Id'
@@ -664,7 +674,11 @@ paths:
     patch:
       tags: [Tickets]
       summary: Change a ticket's priority (staff)
-      description: Writes a `priority` event. Sending the current priority changes nothing.
+      description: |
+        Writes a `priority` event. Recalculates both SLA deadlines from `created_at` with the
+        policy for the new priority, and writes a `response_due_at` and a `resolution_due_at`
+        event for each deadline that moved. `PATCH /tickets/{id}` does the same when staff
+        change the priority there. Sending the current priority changes nothing.
       operationId: changeTicketPriority
       parameters:
         - $ref: '#/components/parameters/Id'
@@ -807,6 +821,52 @@ paths:
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
+  /sla-policies:
+    get:
+      tags: [SLA policies]
+      summary: List SLA policies (staff)
+      description: The organization's four policies, most urgent priority first.
+      operationId: listSlaPolicies
+      responses:
+        '200':
+          description: The policies.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/SlaPolicy' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+  /sla-policies/{priority}:
+    put:
+      tags: [SLA policies]
+      summary: Set the SLA policy for a priority (admin)
+      description: |
+        Applies to tickets created afterwards and to later priority changes. Existing tickets
+        keep their deadlines.
+      operationId: updateSlaPolicy
+      parameters:
+        - name: priority
+          in: path
+          required: true
+          schema: { $ref: '#/components/schemas/TicketPriority' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SlaPolicyInput' }
+      responses:
+        '200':
+          description: The saved policy.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SlaPolicy' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
   /health:
     get:
       tags: [Health]
@@ -915,9 +975,41 @@ components:
       type: string
       enum: [low, medium, high, critical]
       default: medium
+    SlaState:
+      type: string
+      enum: [none, met, on_track, at_risk, breached]
+      description: |
+        `none`: no deadline. `met`: completed on time. `breached`: completed late, or still
+        running past the deadline. `at_risk`: running with less than 25% of the window left.
+        `on_track`: running with more left.
+    SlaSummary:
+      type: object
+      description: |
+        The ticket's SLA clocks at the time of the response. The response clock stops at
+        `first_response_at`, the resolution clock at `resolved_at`. `overall` is the more
+        severe of the two (breached > at_risk > on_track > met > none).
+      properties:
+        response: { $ref: '#/components/schemas/SlaState' }
+        resolution: { $ref: '#/components/schemas/SlaState' }
+        overall: { $ref: '#/components/schemas/SlaState' }
+      example: { response: met, resolution: on_track, overall: on_track }
+    SlaPolicy:
+      type: object
+      properties:
+        priority: { $ref: '#/components/schemas/TicketPriority' }
+        response_minutes: { type: integer, example: 60 }
+        resolution_minutes: { type: integer, example: 240 }
+        updated_at: { type: string, format: date-time }
+    SlaPolicyInput:
+      type: object
+      required: [responseMinutes, resolutionMinutes]
+      description: Whole minutes, 5 to 129600 (90 days). The response must be shorter than the resolution.
+      properties:
+        responseMinutes: { type: integer, minimum: 5, maximum: 129600, example: 60 }
+        resolutionMinutes: { type: integer, minimum: 5, maximum: 129600, example: 240 }
     TicketSummary:
       type: object
-      description: A queue row. Deadlines are set from Phase 6.
+      description: A queue row.
       properties:
         id: { type: integer }
         organization_id: { type: integer }
@@ -932,13 +1024,22 @@ components:
         requester_name: { type: string }
         assignee_id: { type: integer, nullable: true }
         assignee_name: { type: string, nullable: true }
-        response_due_at: { type: string, format: date-time, nullable: true }
+        response_due_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: First public staff reply due. Null only for tickets created before SLAs existed.
         resolution_due_at: { type: string, format: date-time, nullable: true }
-        first_response_at: { type: string, format: date-time, nullable: true }
+        first_response_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: The first public staff reply, or the resolution if that came first.
         resolved_at: { type: string, format: date-time, nullable: true }
         closed_at: { type: string, format: date-time, nullable: true }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+        sla: { $ref: '#/components/schemas/SlaSummary' }
     Ticket:
       description: A full ticket, as returned by create, get and update.
       allOf:
@@ -967,7 +1068,10 @@ components:
         actor_name: { type: string, example: Tess Tech }
         field:
           type: string
-          description: What changed, for example `created`, `status`, `assignee`, `priority`, `title`, `category`.
+          description: |
+            What changed, for example `created`, `status`, `assignee`, `priority`, `title`,
+            `category`, `response_due_at`, `resolution_due_at` (ISO timestamps), or
+            `sla_breach` (written by the system; `new_value` is `response` or `resolution`).
           example: status
         old_value: { type: string, nullable: true, example: open }
         new_value: { type: string, nullable: true, example: in_progress }

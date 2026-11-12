@@ -17,7 +17,7 @@ Every request passes through this middleware, in order:
 5. `pino-http`: one log line per request, with a fresh UUID request id also returned in the `X-Request-Id` header. 4xx responses log as `warn`, 5xx as `error`.
 6. `express.json({ limit: '100kb' })` and `cookieParser()`.
 7. A general rate limit on `/api`: 300 requests per minute per IP.
-8. Routers: `/api/health`, `/api/auth`, `/api/users`, `/api/categories`, `/api/tickets` (which mounts the comments router at `/api/tickets/:id/comments`). Inside a router, protected routes run `authenticate`, then `requireRole(...)`, then `validate(...)`, then the controller.
+8. Routers: `/api/health`, `/api/auth`, `/api/users`, `/api/categories`, `/api/tickets` (which mounts the comments router at `/api/tickets/:id/comments`), `/api/sla-policies`. Inside a router, protected routes run `authenticate`, then `requireRole(...)`, then `validate(...)`, then the controller.
 9. `notFound`, then `errorHandler`.
 
 Feature code follows route → controller → service → queries.
@@ -120,6 +120,32 @@ The lock is what keeps history consistent under concurrency. Two requests changi
 - `GET /:id/events` lists the audit log newest first, with `actor_name` (`System` when `actor_id` is NULL). End users see only `created` and `status` events (`PUBLIC_EVENT_FIELDS`), filtered in SQL.
 - `GET /:id/activity` is the feed for the ticket page. One `UNION ALL` query merges comments and events into one shape (`type, id, actor_name, body, field, old_value, new_value, is_internal, created_at`), oldest first, with the same visibility filters. Events written in one transaction share a timestamp, so ties sort comments before events, then by id. A reply therefore appears before the status change it caused.
 
+### SLAs
+
+`server/src/modules/sla/`. Each org has an `sla_policies` row per priority: minutes until the first response is due, and minutes until resolution is due. The defaults are critical 1 h / 4 h, high 4 h / 1 day, medium 8 h / 2 days, low 1 day / 5 days.
+
+**Decisions:**
+- **24/7 calendar time.** Nights, weekends and `on_hold` don't pause the clocks. Business hours would need a calendar per org (time zones, holidays); calendar time is simple to explain and to check by hand.
+- **Deadlines are anchored to `created_at`.** Changing the priority recalculates both deadlines from the original `created_at`, so raising a ticket to critical doesn't give it a fresh hour, and lowering it doesn't restart the clock.
+- **Deadlines are stored on the ticket** (`response_due_at`, `resolution_due_at`), not calculated from the current policy on every read. An admin editing a policy only affects tickets created afterwards and later priority changes; nobody's deadline moves under them, and old tickets are still judged by the promise made when they were opened. Stored deadlines can also be indexed and sorted on.
+- **The response clock is met by the first public staff reply** (`first_response_at`). An internal note doesn't count: the requester hasn't heard anything. Resolving also counts as the first response if nobody replied before it, because only staff can resolve and "this is fixed" is a reply; otherwise a ticket resolved without a comment would show its response clock running, and breaching, after the work was done.
+- **The resolution clock is met by `resolved_at`.** Reopening clears `resolved_at`, so the clock runs again against the same deadline.
+- **At risk** means less than 25% of the clock's window is left. **Breached** means past the deadline while running, or completed late. A late resolution stays breached afterwards; it isn't "met".
+
+**Pure functions** (`sla.js`, no database code, unit tested with fixed times):
+- `computeDueDates(createdAt, policy)` returns `{ responseDueAt, resolutionDueAt }`.
+- `clockState({ startAt, dueAt, completedAt, now })` returns `met`, `breached`, `at_risk`, `on_track` or `none` (no deadline).
+- `slaSummary(ticket, now)` returns `{ response, resolution, overall }`, where `overall` is the more severe clock: breached > at_risk > on_track > met > none. A met response with the resolution still on track is `on_track`, because work remains.
+
+**Wiring.**
+- Creating a ticket inserts it, then sets the deadlines from the `created_at` the database returned and the org's policy, in the same transaction.
+- A priority change (`PATCH /:id/priority`, or staff changing it through `PATCH /:id`) recalculates both deadlines and writes `response_due_at` / `resolution_due_at` events (old and new ISO timestamps) next to the `priority` event.
+- Every ticket the API returns carries `sla: slaSummary(ticket, now)`. A list request uses one `now` for its filter and every row, so a row can't be filtered as at risk and summarised as breached.
+
+**Queue filters** (`GET /api/tickets?sla=breached|at_risk`). `slaClockSql()` in `tickets.queries.js` writes the same rules as `clockState` in SQL, with the request's `now` as a parameter: breached if any clock is breached; at risk if no clock is breached and a running clock has less than 25% of its window left (`due - now < (due - created_at) * 0.25`). The filter returns exactly the tickets whose `sla.overall` is that value, and a test checks it over a queue with one ticket in each state.
+
+**Policies admin.** `GET /api/sla-policies` (staff) lists the four policies, critical first. `PUT /api/sla-policies/:priority` (admin) takes `{ responseMinutes, resolutionMinutes }`: whole minutes from 5 to 90 days, response shorter than resolution (Zod, backed by the table's `CHECK`). It's an upsert, so PUT sets the policy whether or not the row exists.
+
 ## Database
 
 PostgreSQL 18, written as raw SQL in numbered migrations (`server/db/migrations/`). `npm run migrate` applies each pending file and records it in `schema_migrations` inside one transaction, so a failed migration leaves nothing half-built. Committed migrations are never edited; fixes go in a new file.
@@ -130,7 +156,7 @@ PostgreSQL 18, written as raw SQL in numbered migrations (`server/db/migrations/
 - `users`: everyone who signs in, with their role (`end_user`, `technician`, `admin`) and lockout fields. Emails are unique across all orgs, ignoring case.
 - `categories`: each org's ticket categories.
 - `sla_policies`: each org's response and resolution targets, one row per priority.
-- `tickets`: the helpdesk tickets, numbered per org (RES-1001, ...), with SLA deadlines stored on the row.
+- `tickets`: the helpdesk tickets, numbered per org (RES-1001, ...), with SLA deadlines stored on the row and, from migration 008, `response_breached_at` / `resolution_breached_at` (when the SLA job recorded each breach).
 - `ticket_comments`: public replies and internal staff notes on a ticket.
 - `ticket_events`: the audit log, one row per change to a ticket. A NULL actor means the system made the change.
 - `schema_migrations`: which migration files have been applied.
@@ -163,6 +189,7 @@ These run with the owner's rights, so they bypass RLS. Each does one narrow job 
 - `auth_find_user_by_email(email)`: login has to find the user before it knows their org, and with no org set RLS would hide every user. Returns only what login needs.
 - `auth_record_login_failure(user_id, max_attempts, lock_minutes)`: adds 1 to the failure count and locks the account at the limit. It's called on its own rather than inside the login transaction, because that transaction rolls back when login fails and would undo the count.
 - `create_organization(name, slug)`: during sign-up the new org doesn't exist yet, so there's no org to set, and `resolvd_app` has no INSERT permission on `organizations`.
+- `mark_sla_breaches()`: the SLA job checks every org at once with no org set, so under RLS it would see no tickets. See Background jobs.
 
 ### Indexes
 
@@ -232,6 +259,22 @@ Sign-up has its own per-IP limit of 5 attempts per hour (rejected ones count too
 - **Graceful shutdown.** On `SIGTERM` (Render deploys) or `SIGINT` (Ctrl+C) the server stops accepting connections, lets in-flight requests finish, closes the pool and exits, with a 10-second fallback.
 
 ## Background jobs
+
+### SLA breach checker
+
+`server/src/jobs/slaChecker.js` runs every 5 minutes with node-cron. `server.js` starts it (except when `NODE_ENV=test`) and stops it on shutdown, before the pool closes.
+
+Each run calls one database function, `mark_sla_breaches()` (migration 008), which records every new breach in every org and returns `(ticket_id, org_id, clock)` per breach. It runs two statements, response then resolution. Each is a CTE that does `UPDATE tickets SET <clock>_breached_at = NOW() WHERE <clock>_breached_at IS NULL AND <clock is breached> RETURNING ...` and, in the same statement, inserts an `sla_breach` event (`new_value` `response` or `resolution`, `actor_id` NULL, shown as "System") for each returned row. It's two statements because one statement can't update the same row twice: a ticket that breached both clocks would only get one of the two updates.
+
+**Idempotent.** Running the check again changes nothing that's already recorded: the `breached_at IS NULL` condition skips any clock whose breach is already saved. That matters because the job runs on a timer. If a run is retried, overlaps another, or the server restarts in the middle, the worst case is that the next run finds the same breaches already marked and does nothing. Without it, every run would add another `sla_breach` event (and, from v2, another email) for the same breach. Even two runs at the same instant are safe: the second `UPDATE` waits for the first's row locks, re-checks `breached_at IS NULL`, and skips those rows. Tests run the check twice in a row and twice in parallel and expect one event.
+
+**Why a SECURITY DEFINER function.** The API connects as `resolvd_app`, which only sees rows for the org set with `withOrg`. The job works across all orgs with no org set, so as `resolvd_app` it would see nothing. The function runs with the owner's rights for exactly this one job, with a pinned `search_path`, and only `resolvd_app` may execute it. The alternative, looping over every org with `withOrg`, would be one transaction per org every 5 minutes for the same result.
+
+**Never crashes the server.** The scheduled wrapper, `runScheduledSlaCheck`, catches and logs any error (the next run tries again), and an overlap guard skips a run while the previous one is still going, so a slow database can't pile up connections. Tests call `runSlaCheck()` directly instead of waiting for the timer.
+
+**Priority changes after a breach.** `*_breached_at` belongs to the deadline that was breached. If a priority change moves a deadline so it's no longer breached, the mark is cleared, so the job can record a breach of the new deadline later; if the new deadline has passed too, the mark stays and nothing is recorded twice. The old `sla_breach` event stays in the history either way.
+
+Recording a breach updates the ticket row, so its `updated_at` changes (the `set_updated_at` trigger). That's deliberate: the ticket did change, and a client holding an older copy should reload before editing.
 
 ## Front end
 
