@@ -1,0 +1,5 @@
+/* Styles for the comment box: a yellow edge while writing an internal note, matching the feed. */
+
+.internalMode {
+  border-color: light-dark(var(--mantine-color-yellow-4), var(--mantine-color-yellow-8));
+}

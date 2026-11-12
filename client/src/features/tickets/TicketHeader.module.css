@@ -1,0 +1,10 @@
+/* Styles for the ticket header: long titles and descriptions wrap, and line breaks are kept. */
+
+.title {
+  overflow-wrap: anywhere;
+}
+
+.description {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

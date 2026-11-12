@@ -1,0 +1,15 @@
+/* Styles for the activity feed: yellow internal notes in both colour schemes, and comment text. */
+
+.internalNote {
+  background-color: light-dark(var(--mantine-color-yellow-0), rgba(250, 176, 5, 0.12));
+  border-color: light-dark(var(--mantine-color-yellow-4), var(--mantine-color-yellow-8));
+}
+
+.commentBody {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.event {
+  padding-left: var(--mantine-spacing-xs);
+}

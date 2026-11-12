@@ -70,7 +70,8 @@ describe('route guards', () => {
 
     await type('Password', 'right-password-1');
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
-    expect(await screen.findByRole('heading', { name: 'Ticket 42' })).toBeTruthy();
+    // Back on /tickets/42. The ticket itself isn't mocked, so the page says it wasn't found.
+    expect(await screen.findByText('Ticket not found')).toBeTruthy();
   });
 
   it('shows the 404 page for an unknown address', async () => {
