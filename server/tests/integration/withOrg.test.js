@@ -63,4 +63,18 @@ describe('withTransaction', () => {
     const { rows } = await pool.query("SELECT current_setting('app.rollback_probe', true) AS v");
     expect(rows[0].v).toBe('before');
   });
+
+  // Last in the file: it kills a connection, so the pool no longer has exactly one client.
+  it('rethrows the original error and discards the client when the connection dies', async () => {
+    // A role may terminate its own backend, which breaks the connection mid-transaction,
+    // so the ROLLBACK that follows fails too.
+    await expect(
+      withTransaction((c) => c.query('SELECT pg_terminate_backend(pg_backend_pid())')),
+    ).rejects.toThrow(/terminat/i);
+
+    expect(pool.totalCount).toBe(0);
+    // The pool still works: the next query opens a fresh connection.
+    const { rows } = await pool.query('SELECT 1 AS ok');
+    expect(rows[0].ok).toBe(1);
+  });
 });

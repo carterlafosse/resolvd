@@ -1,19 +1,40 @@
 // Transaction helpers; withOrg scopes a transaction to one organization for row-level security.
+import { logger } from '../utils/logger.js';
 import { pool } from './pool.js';
 
 // Runs work(client) inside BEGIN/COMMIT on one dedicated client, rolling back on any error.
 export async function withTransaction(work) {
   const client = await pool.connect();
+  // Set when the connection itself is broken; passing it to release() makes the pool
+  // destroy the client instead of handing a dead connection to the next request.
+  let brokenConnection;
+  // The pool only listens for errors on idle clients. A connection that dies while checked
+  // out emits 'error' on the client, and with no listener that crashes the whole process.
+  const onClientError = (err) => {
+    brokenConnection ??= err;
+    logger.warn({ err }, 'Database connection error during a transaction');
+  };
+  client.on('error', onClientError);
   try {
     await client.query('BEGIN');
     const result = await work(client);
     await client.query('COMMIT');
     return result;
   } catch (err) {
-    await client.query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch (rollbackErr) {
+      // If ROLLBACK fails the connection is gone. Rethrow the original error, which says
+      // what actually went wrong, rather than the rollback failure.
+      brokenConnection = rollbackErr;
+      logger.warn({ err: rollbackErr }, 'Rollback failed; discarding the connection');
+    }
     throw err;
   } finally {
-    client.release();
+    // A broken client keeps the listener: it's being destroyed, and its socket can still
+    // report errors after release. A healthy one goes back to the pool without it.
+    if (!brokenConnection) client.removeListener('error', onClientError);
+    client.release(brokenConnection);
   }
 }
 
