@@ -1,0 +1,96 @@
+# Continuous integration: lints and tests the API against a real PostgreSQL, and lints, tests and builds the front end.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Read-only token: CI only needs to check out the code.
+permissions:
+  contents: read
+
+# A newer push to the same branch cancels the run it replaces, saving CI minutes.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    name: Server (lint and tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: ci_postgres_password
+        ports:
+          - 5432:5432
+        # Steps start only once the database accepts connections.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # Throwaway values for a database that exists only for this run. They are not secrets and
+    # are never used anywhere else.
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgres://resolvd_app:ci_app_password@localhost:5432/resolvd_test
+      MIGRATION_DATABASE_URL: postgres://resolvd_owner:ci_owner_password@localhost:5432/resolvd_test
+      JWT_SECRET: ci-only-jwt-secret-0123456789abcdef0123456789abcdef
+      CLIENT_ORIGIN: http://localhost:5173
+      SEED_PASSWORD: ci-only-seed-password-1
+
+    defaults:
+      run:
+        working-directory: server
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # The same script Carter runs locally creates the two roles and databases, so CI also
+      # proves the setup script works on a fresh server.
+      - name: Create database roles and databases
+        env:
+          PGPASSWORD: ci_postgres_password
+        run: >-
+          psql -h localhost -U postgres
+          -v owner_pw=ci_owner_password -v app_pw=ci_app_password
+          -f db/setup.sql
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: server/.nvmrc
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      # Vitest's global setup runs the migrations and the seed against resolvd_test first.
+      - run: npm test
+
+  client:
+    name: Client (lint, tests and build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    defaults:
+      run:
+        working-directory: client
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: client/.nvmrc
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build

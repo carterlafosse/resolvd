@@ -384,4 +384,32 @@ Compared with `useEffect` + `fetch` in each component, the query cache gives sha
 
 Vitest with jsdom and React Testing Library (`client/src/**/*.test.js(x)`). `fetch` is replaced per test, so no API is needed. They cover the API client's error parsing, the slug generator, the route guards and admin navigation, signing in and returning to the requested page, the sign-up form, the badges and SLA wording, the queue filters and the requests the queue sends, the new ticket form, the ticket page (allowed actions, internal notes, closed tickets, the 409 reload), the activity sentences, and the admin pages.
 
+## Testing and CI
+
+### Server tests
+
+Vitest and Supertest against a real PostgreSQL database, `resolvd_test`. The database is never mocked: row-level security, composite foreign keys, row locks and constraint errors only behave like production in a real database.
+
+- **Setup.** `server/.env.test` (from `.env.test.example`) points both connections at `resolvd_test`. `tests/globalSetup.js` runs once per run: it refuses any database whose name doesn't end in `_test` (the seed truncates every table), then runs the migrations and the seed. Test files run one at a time (`fileParallelism: false`) because they share the database.
+- **Data.** The seed's Acme and Globex users are imported from `server/db/seeds/users.js`, so tests and seed can't disagree. Tests that need exact numbers (ticket numbers from 1001, an empty queue) sign up their own organization with `registerOrg()` or `setUpOrg()`. Tests that lock or deactivate accounts create their own users through the owner connection.
+- **Unit tests** (`tests/unit/`) cover the pure rules: the workflow table, SLA clocks, pagination, search parsing, id limits, validation and errors. They need no database and run in milliseconds.
+- **Integration tests** (`tests/integration/`) send real HTTP requests to `createApp()` for each module, and check the database through the owner connection where the API can't show the effect (events, lock counters).
+- `npm run test:coverage` reports coverage (`server/coverage/index.html`). No minimum is enforced.
+
+### The suites that guard the important promises
+
+- **Isolation** (`isolation.test.js`). Signed in as Globex's admin, every endpoint that takes an id is called with Acme's ids. Each must return 404, identical to the answer for an id that doesn't exist, and the Acme rows must be unchanged. Globex's lists (every role, every page, searches for Acme's ticket number) contain no Acme rows, and assignment across organizations is refused in both directions.
+- **Raw RLS.** The same file connects with `pg` as `resolvd_app` and queries the tables with no `WHERE organization_id` at all. With no org set, every tenant table is empty; inside a transaction that sets Acme, exactly Acme's rows appear (compared with the owner's count) and nothing of Globex's, even with `WHERE organization_id = <Globex>`; after the transaction, nothing again. Updates, deletes and inserts aimed at the other organization touch nothing or fail. Because these queries bypass the services, they prove the database enforces isolation on its own: a forgotten `WHERE` clause in a future query would still return only the caller's rows. Run as the owner role, these tests fail. A catalog check also requires RLS and the `org_isolation` policy on every table with an `organization_id` column.
+- **Authorization sweep** (`authorization.test.js`). A table lists every route and the roles allowed to call it. The route list is read from the Express routers, so a new route fails the suite until it has a row. Every route is called without a session (401), and by every role: excluded roles get 403, allowed roles never get 401, 403 or 404. Ticket routes are also called by an end user who didn't request the ticket (404).
+- **Concurrency** (`concurrency.test.js` and the workflow and user suites). Twenty tickets created at once get 1001 to 1020 with no gaps or duplicates; parallel status changes produce a consistent event history; two admins demoting each other can't leave the org without an admin.
+
+### CI
+
+`.github/workflows/ci.yml` runs on every push and pull request, in two jobs:
+
+- **server:** a `postgres:18` service container; `db/setup.sql` creates the two roles and databases (the same script used locally, with throwaway passwords that exist only for that run); Node from `server/.nvmrc`; `npm ci`, `npm run lint`, `npm test` (which migrates and seeds `resolvd_test`).
+- **client:** `npm ci`, `npm run lint`, `npm test`, `npm run build`.
+
+CI catches what local runs can miss: a file that exists only on one machine, a dependency missing from `package-lock.json`, a migration that only works on an existing database (CI's is always fresh), differences between Windows and Linux (file name case, line endings), and forgetting to run the tests before pushing.
+
 ## Deployment

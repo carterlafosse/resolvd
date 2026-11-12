@@ -217,3 +217,8 @@ Carter's requests after checking ScreenGuide AI's conventions, made as a separat
 - **Visibility in the sweep:** every ticket route an end user may call is also tried by a different end user, and must be 404.
 - **Concurrency test in its own file** (`concurrency.test.js`). It also checks that the organization's counter ends at 1021 and that exactly 20 `created` events exist.
 - **Mutation checks (by hand, not committed):** removing `requireRole('admin')` from `POST /api/categories`, adding an unlisted route, and replacing the one-statement ticket number claim with a `SELECT` then `UPDATE` each made these tests fail. The source was restored afterwards.
+- **CI creates the roles with `server/db/setup.sql`**, the script used locally, rather than separate `psql` commands. The plan asks for the two roles and `resolvd_test`; the script also creates an unused `resolvd_dev`, and in exchange every CI run proves the setup script works on a fresh server.
+- **CI reads the Node version from each app's `.nvmrc`** (`26`) instead of repeating it in the workflow, so there is one place to change it.
+- **CI extras:** `permissions: contents: read` (the workflow only needs to read the code), a `concurrency` group that cancels a run when a newer push to the same branch replaces it (saves the private repo's free minutes), and job timeouts (15 and 10 minutes) so a hung run can't use them up.
+- **CI values are plain text in the workflow,** as the plan says: throwaway passwords for a database that exists only during the run. They're written as `KEY: value` YAML, so `git grep -n "PASSWORD="` still lists only placeholders.
+- **`docs/architecture.md` has a new "Testing and CI" section** (the plan's stub had no heading for it), placed before Deployment.
