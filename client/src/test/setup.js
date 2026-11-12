@@ -30,3 +30,10 @@ class ResizeObserver {
 window.ResizeObserver = ResizeObserver;
 
 window.HTMLElement.prototype.scrollIntoView = () => {};
+
+// Mantine's autosize Textarea re-measures when web fonts load; jsdom has no document.fonts.
+if (!document.fonts) {
+  Object.defineProperty(document, 'fonts', {
+    value: { addEventListener: () => {}, removeEventListener: () => {} },
+  });
+}

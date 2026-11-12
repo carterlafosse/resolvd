@@ -1,0 +1,5 @@
+/* Styles for the new ticket page: keep the form at a comfortable reading width. */
+
+.formCard {
+  max-width: 720px;
+}
