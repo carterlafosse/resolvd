@@ -100,3 +100,18 @@ export async function login({ email, password }) {
     return { user, organization };
   });
 }
+
+// Used by authenticate on every request. The token only says who and which org; the role and
+// active flag are read fresh, so a demotion or deactivation applies to the very next request.
+export async function findSessionUser(userId, orgId) {
+  const user = await withOrg(orgId, (client) => usersQueries.findUserById(client, userId));
+  return user?.is_active ? user : null;
+}
+
+// GET /api/auth/me: the signed-in user plus their organization's name and slug.
+export async function getCurrentUser(userId, orgId) {
+  return withOrg(orgId, async (client) => ({
+    user: await usersQueries.findUserById(client, userId),
+    organization: await queries.findCurrentOrganization(client),
+  }));
+}
