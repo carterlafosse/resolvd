@@ -284,3 +284,32 @@
 
 **Next:**
 - Phase 9: test infrastructure, isolation suite and CI (issue #11)
+
+## 2026-11-12 (Phase 9: test infrastructure, isolation suite and CI)
+
+**Did:**
+- Claude Code finished the test setup and added three key suites (553 server tests, 87.6% line coverage):
+    - **Isolation suite:** signed in as Globex's admin, every endpoint that takes an id is tried with Acme's ids and returns the same 404 as a missing record, with Acme's data checked unchanged before and after. A raw row-level security test connects to the database directly as `resolvd_app` and shows it can't see or change another organization's rows, even with a `WHERE` clause asking for them
+    - **Authorization sweep:** reads the real route list from the app and tries every role on every route, so a new route can't be added without its access rules being tested
+    - **Concurrency test:** 20 tickets created at once get numbers 1001 to 1020 with no duplicates
+- Added a safety guard so the tests refuse to run unless the database name ends in `_test`, since the test seed wipes every table
+- Added GitHub Actions CI: every push runs lint and tests for the server against a real PostgreSQL 18 database, and lint, tests and a build for the client
+- Pushed, and CI went green on its first run (553 server and 74 client tests, 1m 22s)
+
+**Problems:**
+- None in the code. I nearly lost track of which screenshot was committed. `git push` only sends commits, so `git status` and `git log --stat` showed exactly what was and wasn't on GitHub
+
+**Learned:**
+- A test only proves something if you've seen it fail. Claude Code checked each new suite by temporarily breaking the code (running RLS tests as the owner role, removing an admin check, using the unsafe ticket-number logic) and confirming the tests caught it
+- CI runs on a brand-new machine every time, so it catches things that only work on my PC by accident
+
+**Concept checks:**
+- Unit vs integration tests: why both?
+    - Unit tests check pure logic (workflow rules, SLA maths) on its own, so they're fast and cover every edge case. Integration tests run real HTTP requests against a real database, so they prove the pieces work together: SQL, transactions, row-level security, cookies and role checks. Logic can be right while the wiring is wrong, and the reverse
+- How does the isolation suite prove RLS works independently of the `WHERE` clauses?
+    - The raw RLS test skips the app entirely and connects as `resolvd_app`. Even a query explicitly asking for Globex's rows returns nothing while Acme's org is set, so the database itself is enforcing isolation. When the same tests ran as the owner role (which bypasses RLS), 5 failed, proving the tests really detect missing RLS
+- What does CI catch that running tests locally doesn't?
+    - Things that only work on my machine: files I forgot to commit, a `.env` value only I have, dependencies installed locally but missing from `package.json`, or code that only works on Windows. CI starts from a clean copy of the repo every time, and it runs on every push, so nothing slips through just because I forgot to run the tests
+
+**Next:**
+- Phase 10: demo data, deployment and the v1.0 release (issue #12)
