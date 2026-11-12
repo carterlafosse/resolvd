@@ -73,6 +73,14 @@ export function canTransition({ ticket, to, user, now }) {
   return allow();
 }
 
+// Every status `user` may move `ticket` to right now, by asking canTransition about each one.
+// The ticket detail response sends this list so the front end shows exactly the moves the API
+// would accept, instead of keeping its own copy of the rules. The current status is never in
+// it, because moving to the same status is refused.
+export function allowedTransitions({ ticket, user, now }) {
+  return Object.keys(TRANSITIONS).filter((to) => canTransition({ ticket, to, user, now }).ok);
+}
+
 // The timestamp columns a status change sets or clears, keyed by the API field names used in
 // tickets.queries.js (updateTicket). Resolving records when; reopening a resolved ticket clears
 // it, so resolved_at always describes the current resolution; closing records when.

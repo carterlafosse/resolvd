@@ -98,6 +98,13 @@ Anything thrown (or a rejected promise from an async handler, which Express 5 fo
 
 A refused move is 400 `INVALID_TRANSITION` with the reason as the message. The plan asks for 400 here (not 403) because the reason, not the role, is what the user needs to read: "Tickets can only be reopened within 7 days..." explains more than "Forbidden".
 
+**Allowed actions on the detail response.** `GET /api/tickets/:id` adds three fields for the viewer:
+- `allowedTransitions`: `allowedTransitions({ ticket, user, now })` in `workflow.js` asks `canTransition` about every status and keeps the ones that pass.
+- `canEdit`: the same `canEdit(user, ticket)` that `PATCH /:id` checks (staff until closed, the requester while open).
+- `canComment`: the same "not closed" rule the comments endpoint checks.
+
+The front end shows only these options instead of keeping its own copy of the workflow table. One copy of the rules means the buttons can't drift from what the API accepts (for example the 7-day reopen window, which depends on the server's clock). The API still checks every request, so these fields are for display, not security. Only the detail carries them: list rows and write responses don't, and the front end refetches the detail after a change.
+
 **Every write follows the same steps** (status, assignment, priority, comments):
 1. `loadTicketForUpdate` locks the ticket row with `SELECT ... FOR UPDATE` and returns 404 unless the caller can see it.
 2. The rules are checked against that locked row.

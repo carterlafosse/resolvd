@@ -163,3 +163,9 @@ Carter's requests after checking ScreenGuide AI's conventions, made as a separat
 - **Tests (7.4) go a little beyond the two the plan names,** because there's no browser available to Claude Code to click through: route guards (signed-out redirect, admin-only navigation, no-access message, 404), signing in and returning to the requested page, and the sign-up form (slug suggestion, API field error under the input, no request when the form is invalid). They replace `fetch`, so no API is needed. Test files sit next to the code (`*.test.js(x)`); `src/test/` holds the setup (Mantine's jsdom polyfills) and `renderWithProviders`.
 - **Vite's 500 kB chunk warning on `npm run build` is left for now.** The whole app is one bundle (about 175 kB of JavaScript gzipped, 570 kB before compression). Splitting pages with `React.lazy` can come later if load time matters.
 - **`npm audit`** in `client` reports the same 4 moderate dev-only advisories as the server (ESLint's `minimatch`); `npm audit --omit=dev` is clean.
+
+## Phase 8: Ticket pages and admin screens
+
+- **Only `GET /tickets/:id` carries the allowed actions.** List rows and the responses of write endpoints (status, assignment, priority, edit) don't. After any change the front end invalidates the ticket query and refetches the detail, so the options always come from one place.
+- **`allowedTransitions` is in status order** (`open, in_progress, on_hold, resolved, closed`), not the order of the workflow table, so the status menu always lists statuses the same way.
+- **`canEdit` and `canComment` are the write paths' own rules.** `canEdit(user, ticket)` is now what `PATCH /tickets/:id` checks (through `assertCanEdit`, which keeps its distinct 400 for closed and 403 for "not at this stage"). `canComment(ticket)` is "not closed", the comments endpoint's rule. OpenAPI version 0.6.0 adds a `TicketDetail` schema.

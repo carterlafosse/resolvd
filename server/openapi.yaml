@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Resolvd API
-  version: 0.5.0
+  version: 0.6.0
   description: |
     Multi-organization IT helpdesk API. Each organization's data is isolated in every
     query and again by PostgreSQL row-level security.
@@ -484,15 +484,19 @@ paths:
     get:
       tags: [Tickets]
       summary: Get a ticket
+      description: |
+        The full ticket, plus what the signed-in user may do with it right now
+        (`allowedTransitions`, `canEdit`, `canComment`). These come from the same rules the
+        write endpoints enforce, so a client can show only the actions that will succeed.
       operationId: getTicket
       parameters:
         - $ref: '#/components/parameters/Id'
       responses:
         '200':
-          description: The ticket.
+          description: The ticket and the viewer's allowed actions.
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/Ticket' }
+              schema: { $ref: '#/components/schemas/TicketDetail' }
         '400': { $ref: '#/components/responses/ValidationError' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '404': { $ref: '#/components/responses/NotFound' }
@@ -1047,6 +1051,25 @@ components:
         - type: object
           properties:
             description: { type: string }
+    TicketDetail:
+      description: A full ticket with the viewer's allowed actions, as returned by `GET /tickets/{id}`.
+      allOf:
+        - $ref: '#/components/schemas/Ticket'
+        - type: object
+          properties:
+            allowedTransitions:
+              type: array
+              description: |
+                Statuses this viewer may move the ticket to now (`PATCH /tickets/{id}/status`).
+                Never includes the current status. Empty for a closed ticket.
+              items: { $ref: '#/components/schemas/TicketStatus' }
+              example: [in_progress, on_hold, resolved]
+            canEdit:
+              type: boolean
+              description: Whether `PATCH /tickets/{id}` may change title, description and category.
+            canComment:
+              type: boolean
+              description: Whether the viewer may post a comment (false once the ticket is closed).
     Comment:
       type: object
       properties:

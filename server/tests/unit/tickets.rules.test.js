@@ -7,7 +7,10 @@ import {
   updateTicketSchema,
 } from '../../src/modules/tickets/tickets.schemas.js';
 import {
+  allowedActions,
   assertCanSetPriority,
+  canComment,
+  canEdit,
   canView,
   parseTicketSearch,
 } from '../../src/modules/tickets/tickets.service.js';
@@ -139,5 +142,45 @@ describe('parseTicketSearch', () => {
 
   it('escapes LIKE wildcards so they match literally', () => {
     expect(parseTicketSearch('100%_done\\').titlePattern).toBe('%100\\%\\_done\\\\%');
+  });
+});
+
+describe('canEdit and canComment', () => {
+  const ticket = (status) => ({ status, requester_id: endUser.id, resolved_at: null });
+
+  it('lets the requester edit only while the ticket is open', () => {
+    expect(canEdit(endUser, ticket('open'))).toBe(true);
+    for (const status of ['in_progress', 'on_hold', 'resolved', 'closed']) {
+      expect(canEdit(endUser, ticket(status))).toBe(false);
+    }
+  });
+
+  it('lets staff edit at any status except closed', () => {
+    for (const user of [technician, admin]) {
+      for (const status of ['open', 'in_progress', 'on_hold', 'resolved']) {
+        expect(canEdit(user, ticket(status))).toBe(true);
+      }
+      expect(canEdit(user, ticket('closed'))).toBe(false);
+    }
+  });
+
+  it('allows comments until the ticket is closed', () => {
+    for (const status of ['open', 'in_progress', 'on_hold', 'resolved']) {
+      expect(canComment(ticket(status))).toBe(true);
+    }
+    expect(canComment(ticket('closed'))).toBe(false);
+  });
+
+  it('allowedActions combines all three for the viewer', () => {
+    expect(allowedActions(endUser, ticket('open'))).toEqual({
+      allowedTransitions: [],
+      canEdit: true,
+      canComment: true,
+    });
+    expect(allowedActions(technician, ticket('open'))).toEqual({
+      allowedTransitions: ['in_progress', 'on_hold', 'resolved'],
+      canEdit: true,
+      canComment: true,
+    });
   });
 });

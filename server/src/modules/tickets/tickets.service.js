@@ -6,7 +6,7 @@ import { fieldError } from '../../utils/pgErrors.js';
 import { slaSummary, withSla } from '../sla/sla.js';
 import { dueDatesFor } from '../sla/sla.service.js';
 import * as queries from './tickets.queries.js';
-import { canTransition, isStaff, statusChangeEffects } from './workflow.js';
+import { allowedTransitions, canTransition, isStaff, statusChangeEffects } from './workflow.js';
 
 // Rules (all enforced here; tickets.queries.js only runs SQL):
 // - End users see only tickets they requested. Technicians and admins see every ticket in
@@ -41,6 +41,8 @@ import { canTransition, isStaff, statusChangeEffects } from './workflow.js';
 //   A breach the SLA job recorded is cleared if the new deadline isn't breached.
 // - Resolving a ticket counts as the first response if no public staff reply came first.
 // - Every ticket returned (list and detail) carries sla: { response, resolution, overall }.
+// - The detail (GET /:id) also carries allowedTransitions, canEdit and canComment for the
+//   viewer, computed by the same functions the write paths use.
 
 // isStaff lives in workflow.js (no database imports) and is re-exported for the other modules.
 export { isStaff };
@@ -186,13 +188,15 @@ export async function loadTicketForRead(client, user, ticketId) {
 }
 
 // GET /api/tickets/:id. The visibility rule is in the query's WHERE clause.
+// The detail also says what this viewer may do with the ticket, worked out from the same rules
+// the write endpoints enforce, so the front end never needs its own copy of them.
 export function getTicket(user, ticketId) {
   return withOrg(user.orgId, async (client) => {
     const ticket = await findTicketWithSla(client, ticketId, {
       requesterId: requesterIdFilter(user),
     });
     if (!ticket) throw ticketNotFound();
-    return ticket;
+    return { ...ticket, ...allowedActions(user, ticket) };
   });
 }
 
@@ -202,11 +206,33 @@ export function assertNotClosed(ticket, message = "This ticket is closed and can
   if (ticket.status === 'closed') throw AppError.badRequest(message, undefined, 'TICKET_CLOSED');
 }
 
+// May this (visible) ticket's title, description and category be edited by `user` right now?
+// Staff: any status but closed. The requester: only while it's open.
+export function canEdit(user, ticket) {
+  if (ticket.status === 'closed') return false;
+  return isStaff(user) || ticket.status === 'open';
+}
+
+// May `user` comment on this (visible) ticket? Anyone who can see it, until it's closed.
+// Internal notes are a separate, staff-only choice made when posting.
+export function canComment(ticket) {
+  return ticket.status !== 'closed';
+}
+
+// What the ticket detail tells the front end about this viewer's options.
+export function allowedActions(user, ticket, now = new Date()) {
+  return {
+    allowedTransitions: allowedTransitions({ ticket, user, now }),
+    canEdit: canEdit(user, ticket),
+    canComment: canComment(ticket),
+  };
+}
+
 // Who may edit this ticket's details right now (the ticket is already known to be visible).
 function assertCanEdit(user, ticket) {
   assertNotClosed(ticket, "This ticket is closed and can't be edited");
   // 403, not 404: the requester can see the ticket, they just can't edit it at this stage.
-  if (!isStaff(user) && ticket.status !== 'open') {
+  if (!canEdit(user, ticket)) {
     throw AppError.forbidden(
       'You can only edit your ticket while it is open. Add a comment instead.',
     );

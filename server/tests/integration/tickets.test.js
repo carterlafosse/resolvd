@@ -364,6 +364,83 @@ describe('GET /api/tickets/:id', () => {
       expect((await ctx.tech.get(`/api/tickets/${id}`)).status).toBe(400);
     }
   });
+
+  describe('allowed actions for the viewer', () => {
+    const actionsOf = async (agent, id) => {
+      const { body } = await agent.get(`/api/tickets/${id}`);
+      return {
+        allowedTransitions: body.allowedTransitions,
+        canEdit: body.canEdit,
+        canComment: body.canComment,
+      };
+    };
+
+    it('on an open ticket: staff get the staff moves, the requester can edit and comment', async () => {
+      const open = await createTicket(ctx.alice);
+
+      expect(await actionsOf(ctx.tech, open.id)).toEqual({
+        allowedTransitions: ['in_progress', 'on_hold', 'resolved'],
+        canEdit: true,
+        canComment: true,
+      });
+      expect(await actionsOf(ctx.alice, open.id)).toEqual({
+        allowedTransitions: [],
+        canEdit: true,
+        canComment: true,
+      });
+    });
+
+    it('on a resolved ticket: the requester can confirm or reopen but no longer edit', async () => {
+      const resolved = await createTicket(ctx.alice);
+      expect(
+        (await ctx.tech.patch(`/api/tickets/${resolved.id}/status`).send({ status: 'resolved' }))
+          .status,
+      ).toBe(200);
+
+      expect(await actionsOf(ctx.alice, resolved.id)).toEqual({
+        allowedTransitions: ['open', 'closed'],
+        canEdit: false,
+        canComment: true,
+      });
+      expect((await actionsOf(ctx.admin, resolved.id)).allowedTransitions).toEqual([
+        'open',
+        'closed',
+      ]);
+
+      // Eight days later the requester can only confirm; staff can still reopen.
+      await setTicketColumns(resolved.id, {
+        resolved_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
+      });
+      expect((await actionsOf(ctx.alice, resolved.id)).allowedTransitions).toEqual(['closed']);
+      expect((await actionsOf(ctx.tech, resolved.id)).allowedTransitions).toEqual([
+        'open',
+        'closed',
+      ]);
+    });
+
+    it('on a closed ticket: nobody can do anything', async () => {
+      const closed = await createTicket(ctx.alice);
+      await ctx.tech.patch(`/api/tickets/${closed.id}/status`).send({ status: 'resolved' });
+      await ctx.alice.patch(`/api/tickets/${closed.id}/status`).send({ status: 'closed' });
+
+      for (const agent of [ctx.alice, ctx.tech, ctx.admin]) {
+        expect(await actionsOf(agent, closed.id)).toEqual({
+          allowedTransitions: [],
+          canEdit: false,
+          canComment: false,
+        });
+      }
+    });
+
+    it('every listed move is accepted by the status endpoint', async () => {
+      const t = await createTicket(ctx.alice);
+      const { allowedTransitions } = await actionsOf(ctx.tech, t.id);
+      const target = allowedTransitions.at(-1);
+      expect(
+        (await ctx.tech.patch(`/api/tickets/${t.id}/status`).send({ status: target })).status,
+      ).toBe(200);
+    });
+  });
 });
 
 describe('PATCH /api/tickets/:id', () => {

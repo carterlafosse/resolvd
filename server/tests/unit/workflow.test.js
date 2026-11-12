@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   REOPEN_WINDOW_DAYS,
+  allowedTransitions,
   canTransition,
   isStaff,
   statusChangeEffects,
@@ -181,5 +182,45 @@ describe('statusChangeEffects', () => {
     expect(statusChangeEffects({ from: 'open', to: 'in_progress', now: NOW })).toEqual({});
     expect(statusChangeEffects({ from: 'in_progress', to: 'open', now: NOW })).toEqual({});
     expect(statusChangeEffects({ from: 'on_hold', to: 'in_progress', now: NOW })).toEqual({});
+  });
+});
+
+describe('allowedTransitions', () => {
+  const allowed = (status, user, overrides) =>
+    allowedTransitions({ ticket: ticket(status, overrides), user, now: NOW });
+
+  it('lists every staff move from the workflow table, in status order', () => {
+    expect(allowed('open', technician)).toEqual(['in_progress', 'on_hold', 'resolved']);
+    expect(allowed('in_progress', admin)).toEqual(['open', 'on_hold', 'resolved']);
+    expect(allowed('on_hold', technician)).toEqual(['in_progress', 'resolved']);
+    expect(allowed('resolved', technician)).toEqual(['open', 'closed']);
+  });
+
+  it('gives the requester only confirm and reopen, and only on a resolved ticket', () => {
+    expect(allowed('open', requester)).toEqual([]);
+    expect(allowed('on_hold', requester)).toEqual([]);
+    expect(allowed('resolved', requester)).toEqual(['open', 'closed']);
+  });
+
+  it('drops reopen for the requester after the 7-day window', () => {
+    expect(allowed('resolved', requester, { resolved_at: daysAgo(8) })).toEqual(['closed']);
+  });
+
+  it('gives another end user nothing, and nobody anything on a closed ticket', () => {
+    expect(allowed('resolved', otherEndUser)).toEqual([]);
+    for (const user of [requester, technician, admin]) {
+      expect(allowed('closed', user)).toEqual([]);
+    }
+  });
+
+  it('matches canTransition for every status and role', () => {
+    for (const from of STATUSES) {
+      for (const user of [requester, otherEndUser, technician, admin]) {
+        const expected = STATUSES.filter(
+          (to) => canTransition({ ticket: ticket(from), to, user, now: NOW }).ok,
+        );
+        expect(allowed(from, user)).toEqual(expected);
+      }
+    }
   });
 });
