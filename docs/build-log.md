@@ -187,3 +187,31 @@
 
 **Next:**
 - Phase 6: SLAs and the breach-checking job (issue #8)
+
+## 2026-11-12 (Phase 6: SLAs and the breach-checking job)
+
+**Did:**
+- Claude Code built SLA tracking: response and resolution deadlines set from each ticket's priority, a live SLA state on every ticket (on track, at risk, breached, met), `sla=breached` and `sla=at_risk` queue filters, admin-editable SLA policies, and a background job that records breaches every 5 minutes (413 tests total)
+- Ran migration 008 and checked the server log showed "SLA checker scheduled every 5 minutes"
+- Created a critical ticket in Bruno and confirmed its deadlines were exactly +1 hour (response) and +4 hours (resolution)
+- Tested SLA policies: a technician got 403 trying to update them; as an admin I changed critical to 30/240 and set it back to 60/240
+- Forced a breach by setting a ticket's resolution deadline 10 minutes in the past with `psql`. At the next 5-minute mark the log showed "SLA check recorded 1 breach(es)", and `ticket_events` had one `sla_breach` row with no actor (the system). After the next run there was still only one row
+
+**Problems:**
+- None this phase. Tickets created before migration 008 have no deadlines, so their SLA shows `none`. That's expected, not a bug
+
+**Learned:**
+- An SLA is a promise about how fast IT responds to and resolves a problem, based on priority. A breach is a missed deadline, and helpdesks track compliance as a key metric
+- A background job can find problems on its own instead of waiting for someone to load a page
+- Claude Code made resolving a ticket count as the first response, so a ticket fixed without a comment doesn't get flagged for a missed response
+
+**Concept checks:**
+- Why store deadlines on the ticket instead of calculating from the current policy?
+    - So changing a policy doesn't rewrite history. If an admin shortens the critical deadline today, tickets created last week keep the deadlines they were given, and past SLA reports stay accurate
+- What does idempotent mean, and why does the breach job need it?
+    - Running it once or many times has the same result. The job runs every 5 minutes, so it must not record the same breach again each time. It only marks tickets whose breach column is still empty, which I confirmed: one `sla_breach` row even after a second run
+- Why does the job use a SECURITY DEFINER function?
+    - The job runs with no logged-in user, so there's no organization set, and row-level security would hide every ticket. A narrow SECURITY DEFINER function runs with the owner's rights to do exactly one job (mark breaches across all organizations) and nothing else, and only `resolvd_app` can call it
+
+**Next:**
+- Phase 7: front end foundation (issue #9)
