@@ -1,5 +1,5 @@
-ScreenGuide-AI 
+# Resolvd
 
-AI tech support that watches your screen and talks you through the fix, for small businesses without an IT department.
+Multi-organization IT helpdesk with SLA tracking, role-based access and PostgreSQL row-level security. Built with Express, PostgreSQL and React.
 
-Work in progress.
+**Status:** Work in progress
