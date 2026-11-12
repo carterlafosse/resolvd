@@ -116,6 +116,14 @@ export async function loadTicketForUpdate(client, user, ticketId) {
   return ticket;
 }
 
+// For endpoints that only read a ticket's comments or history: 404 unless the caller can see
+// the ticket. No lock, because nothing is changed.
+export async function loadTicketForRead(client, user, ticketId) {
+  const ticket = await queries.findTicketAccess(client, ticketId);
+  if (!ticket || !canView(user, ticket)) throw ticketNotFound();
+  return ticket;
+}
+
 // GET /api/tickets/:id. The visibility rule is in the query's WHERE clause.
 export function getTicket(user, ticketId) {
   return withOrg(user.orgId, async (client) => {
@@ -224,6 +232,15 @@ export async function writeStatusChange(client, { ticket, to, actorId, now }) {
     newValue: to,
   });
   ticket.status = to;
+}
+
+// Records when staff first replied publicly (the SLA response clock from Phase 6). Only the
+// first reply counts, so a ticket that already has one is left alone. The comment itself is
+// the record of the reply, so no separate event is written.
+export async function recordFirstResponse(client, ticket, at) {
+  if (ticket.first_response_at !== null) return;
+  await queries.updateTicket(client, ticket.id, { firstResponseAt: at });
+  ticket.first_response_at = at;
 }
 
 // PATCH /api/tickets/:id/status

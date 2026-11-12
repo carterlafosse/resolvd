@@ -78,6 +78,17 @@ export async function findTicketById(client, id, { requesterId = null } = {}) {
   return rows[0] ?? null;
 }
 
+// Just enough to decide whether the caller can see a ticket, for endpoints that read its
+// comments or history without changing it (so no lock).
+export async function findTicketAccess(client, id) {
+  const { rows } = await client.query(
+    `SELECT id, requester_id, status FROM tickets
+     WHERE id = $1 AND organization_id = current_org_id()`,
+    [id],
+  );
+  return rows[0] ?? null;
+}
+
 // Loads a ticket and locks its row until the transaction ends, so two people changing the same
 // ticket at once run one after the other and each sees the other's result. Category and
 // assignee names are included because change events record them by name.

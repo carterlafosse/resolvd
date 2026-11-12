@@ -2,6 +2,7 @@
 import { Router } from 'express';
 import { authenticate, requireRole } from '../../middleware/auth.js';
 import { validate } from '../../middleware/validate.js';
+import { commentsRouter } from '../comments/comments.routes.js';
 import * as controller from './tickets.controller.js';
 import { STAFF_ROLES } from './workflow.js';
 import {
@@ -56,3 +57,5 @@ ticketsRouter.patch(
   validate({ params: ticketIdParams, body: changePrioritySchema }),
   controller.changePriority,
 );
+
+ticketsRouter.use('/:id/comments', commentsRouter);
