@@ -38,7 +38,10 @@ describe('POST /api/auth/register-organization', () => {
     const agent = request.agent(app);
     const body = signUpBody({ email: '  Founder.MIXED@Test.test ' });
 
-    const res = await agent.post('/api/auth/register-organization').send(body);
+    const res = await agent
+      .post('/api/auth/register-organization')
+      .set('X-Forwarded-For', nextTestIp())
+      .send(body);
 
     expect(res.status).toBe(201);
     expect(res.body.user).toMatchObject({ name: 'First Admin', role: 'admin', is_active: true });
@@ -60,6 +63,7 @@ describe('POST /api/auth/register-organization', () => {
   it('ignores a role sent in the body (the first user is always the admin)', async () => {
     const res = await request(app)
       .post('/api/auth/register-organization')
+      .set('X-Forwarded-For', nextTestIp())
       .send({ ...signUpBody(), role: 'end_user' });
 
     expect(res.body.user.role).toBe('admin');
@@ -68,7 +72,10 @@ describe('POST /api/auth/register-organization', () => {
   it('rejects an email that is already registered with 409 and leaves no org behind', async () => {
     const body = signUpBody({ email: USERS.acme.admin.email.toUpperCase() });
 
-    const res = await request(app).post('/api/auth/register-organization').send(body);
+    const res = await request(app)
+      .post('/api/auth/register-organization')
+      .set('X-Forwarded-For', nextTestIp())
+      .send(body);
 
     expect(res.status).toBe(409);
     expect(res.body.error.message).toBe('That email is already registered');
@@ -82,6 +89,7 @@ describe('POST /api/auth/register-organization', () => {
   it('rejects a slug that is taken with 409', async () => {
     const res = await request(app)
       .post('/api/auth/register-organization')
+      .set('X-Forwarded-For', nextTestIp())
       .send(signUpBody({ slug: 'acme-corp' }));
 
     expect(res.status).toBe(409);
@@ -96,15 +104,47 @@ describe('POST /api/auth/register-organization', () => {
   ])('rejects a weak password (%s)', async (_, password) => {
     const res = await request(app)
       .post('/api/auth/register-organization')
+      .set('X-Forwarded-For', nextTestIp())
       .send(signUpBody({ password }));
 
     expect(res.status).toBe(400);
     expect(res.body.error.details.fieldErrors.password).toBeDefined();
   });
 
+  it('limits one IP to 5 sign-up attempts per hour, in the standard error shape', async () => {
+    const ip = nextTestIp();
+    const statuses = [];
+    let last;
+    for (let i = 0; i < 6; i += 1) {
+      // Invalid bodies: the limiter counts every attempt, and no orgs pile up in the test DB.
+      last = await request(app)
+        .post('/api/auth/register-organization')
+        .set('X-Forwarded-For', ip)
+        .send({});
+      statuses.push(last.status);
+    }
+
+    expect(statuses.slice(0, 5)).toEqual(Array(5).fill(400));
+    expect(statuses[5]).toBe(429);
+    expect(last.body).toEqual({
+      error: {
+        code: 'TOO_MANY_REQUESTS',
+        message: 'Too many sign-up attempts. Try again in an hour.',
+      },
+    });
+
+    // Another IP is unaffected.
+    const other = await request(app)
+      .post('/api/auth/register-organization')
+      .set('X-Forwarded-For', nextTestIp())
+      .send({});
+    expect(other.status).toBe(400);
+  });
+
   it('rejects a slug with invalid characters', async () => {
     const res = await request(app)
       .post('/api/auth/register-organization')
+      .set('X-Forwarded-For', nextTestIp())
       .send(signUpBody({ slug: 'Not Valid!' }));
 
     expect(res.status).toBe(400);

@@ -41,6 +41,12 @@ export async function withTransaction(work) {
 // is_local = true makes the setting end with the transaction, so it can never leak to the
 // next request that borrows this pooled connection.
 export async function setOrg(client, orgId) {
+  // Fails loudly before touching the database. A missing or malformed id (undefined, "",
+  // "1 OR 1=1", 0) is always a bug in our code, and silently setting it could mean the
+  // transaction runs with no org (every row hidden) or the wrong one.
+  if (!Number.isInteger(orgId) || orgId <= 0) {
+    throw new TypeError(`setOrg expects a positive integer org id, got ${JSON.stringify(orgId)}`);
+  }
   await client.query("SELECT set_config('app.current_org_id', $1, true)", [String(orgId)]);
 }
 

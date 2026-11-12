@@ -172,13 +172,16 @@ describe('PATCH /api/users/:id', () => {
     async function orgWithTwoAdmins() {
       const tag = randomUUID().slice(0, 8);
       const agentA = request.agent(app);
-      const signUp = await agentA.post('/api/auth/register-organization').send({
-        organizationName: `Race ${tag}`,
-        slug: `race-${tag}`,
-        name: 'Admin A',
-        email: uniqueEmail('a'),
-        password: 'Adminpass123',
-      });
+      const signUp = await agentA
+        .post('/api/auth/register-organization')
+        .set('X-Forwarded-For', nextTestIp())
+        .send({
+          organizationName: `Race ${tag}`,
+          slug: `race-${tag}`,
+          name: 'Admin A',
+          email: uniqueEmail('a'),
+          password: 'Adminpass123',
+        });
       const emailB = uniqueEmail('b');
       const created = await agentA
         .post('/api/users')

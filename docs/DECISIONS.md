@@ -65,3 +65,12 @@ Choices made while building Resolvd that the build plan (`RESOLVD_PLAN.md`) did 
 - **Pulled forward from Phase 9:** `tests/globalSetup.js` (migrate + seed `resolvd_test` once per run) and a minimal `tests/helpers.js` (`app`, `loginAs`, `createUser` via the owner connection with bcrypt cost 4 for speed). `seed()` gained a `table` option so the setup can silence its console table.
 - **Bruno:** passwords use a secret environment variable (`vars:secret [ password ]` in `bruno/environments/local.bru`). Bruno stores its value locally, never in the file.
 - **`.gitkeep` files left in `modules/auth` and `modules/users`.** They're now redundant next to real files but harmless.
+
+## ScreenGuide AI compatibility follow-ups (after Phase 3)
+
+Carter's requests after checking ScreenGuide AI's conventions, made as a separate commit before Phase 4.
+
+- **`setOrg` rejects any org id that isn't a positive integer** and throws before running a query. It throws a plain `TypeError`, not an `AppError`: a bad org id always means a bug in our code (the id comes from the database or a verified token, never from request input), so the client gets the generic 500 and the full error is logged. Strings such as `"7"` are rejected too, because every caller already has a number, and accepting text is how something like `"1 OR 1=1"` could slip through unnoticed.
+- **Sign-up rate limit: 5 per hour per IP** on `POST /api/auth/register-organization`, through the shared `createRateLimiter`, so the 429 uses the standard `TOO_MANY_REQUESTS` error shape. Every attempt counts, including ones rejected by validation, because each real sign-up creates an organization and runs bcrypt. The general `/api` limiter still applies too.
+- **Sign-up tests send a fresh fake IP** (`X-Forwarded-For`), like the login tests, so the suite's many sign-ups don't trip the new limiter.
+- **The `AppError.js` header comment no longer claims it matches ScreenGuide.** It says the helpers are meant to line up and points to the open questions in the Phase 2 section above, which are still unconfirmed.

@@ -16,8 +16,17 @@ const loginLimiter = createRateLimiter({
   message: 'Too many login attempts. Try again in 15 minutes.',
 });
 
+// Each sign-up creates an organization and runs bcrypt, so one IP can only do it a few
+// times an hour. Every request counts, including rejected ones.
+const registerLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000,
+  limit: 5,
+  message: 'Too many sign-up attempts. Try again in an hour.',
+});
+
 authRouter.post(
   '/register-organization',
+  registerLimiter,
   validate({ body: registerOrgSchema }),
   controller.registerOrganization,
 );

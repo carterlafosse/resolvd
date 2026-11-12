@@ -1,5 +1,7 @@
 // AppError: an expected error carrying the HTTP status and code the error handler sends to clients.
-// Helper names and signatures match ScreenGuide AI so the two codebases can share error handling.
+// Helper names and signatures are meant to line up with ScreenGuide AI's AppError so the two
+// codebases can share error handling later. They have not been confirmed identical yet; known
+// differences and open questions are listed in docs/DECISIONS.md (Phase 2).
 export class AppError extends Error {
   constructor(status, code, message, details) {
     super(message);

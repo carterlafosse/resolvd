@@ -28,7 +28,7 @@ info:
     | 413 | `PAYLOAD_TOO_LARGE` | The request body is over 100 KB |
     | 415 | `UNSUPPORTED_MEDIA_TYPE` | Unsupported body charset or content encoding |
     | 422 | `UNPROCESSABLE` | Valid input that breaks a business rule |
-    | 429 | `TOO_MANY_REQUESTS` | Rate limit reached (300 requests per minute per IP on `/api`) |
+    | 429 | `TOO_MANY_REQUESTS` | Rate limit reached (300 requests per minute per IP on `/api`; stricter on login and sign-up) |
     | 500 | `INTERNAL_ERROR` | Unexpected server error (no internals are returned) |
     | 503 | `SERVICE_UNAVAILABLE` | A dependency is temporarily unavailable |
 
@@ -59,6 +59,7 @@ paths:
         Creates the organization, its admin user, the default categories and the default SLA
         policies in one transaction, then signs the new admin in (sets the session cookie).
         Any extra fields (such as `role`) are ignored.
+        Limited to 5 attempts per hour per IP, counting rejected ones.
       operationId: registerOrganization
       security: []
       requestBody:

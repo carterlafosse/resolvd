@@ -1,7 +1,7 @@
 // Transaction helpers: the org setting is scoped to one transaction and errors roll back cleanly.
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { pool } from '../../src/db/pool.js';
-import { withOrg, withTransaction } from '../../src/db/withOrg.js';
+import { setOrg, withOrg, withTransaction } from '../../src/db/withOrg.js';
 
 afterAll(() => pool.end());
 
@@ -11,6 +11,23 @@ const readOrgSetting = async (client) =>
 describe('withOrg', () => {
   it('sets app.current_org_id inside the transaction', async () => {
     expect(await withOrg(42, readOrgSetting)).toBe('42');
+  });
+
+  it.each([[undefined], [null], [0], [-1], [1.5], ['1'], ['1 OR 1=1'], [Number.NaN]])(
+    'rejects org id %j before running any query',
+    async (orgId) => {
+      const fakeClient = { query: vi.fn() };
+
+      await expect(setOrg(fakeClient, orgId)).rejects.toThrow(TypeError);
+      expect(fakeClient.query).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects a bad org id in withOrg without running work', async () => {
+    const work = vi.fn();
+
+    await expect(withOrg('7', work)).rejects.toThrow(/positive integer org id/);
+    expect(work).not.toHaveBeenCalled();
   });
 
   it('does not leak the setting to the connection afterwards', async () => {
