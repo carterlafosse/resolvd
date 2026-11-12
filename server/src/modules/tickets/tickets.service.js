@@ -4,6 +4,7 @@ import { AppError } from '../../utils/AppError.js';
 import { buildPagination, toLimitOffset } from '../../utils/pagination.js';
 import { fieldError } from '../../utils/pgErrors.js';
 import * as queries from './tickets.queries.js';
+import { isStaff } from './workflow.js';
 
 // Rules (all enforced here; tickets.queries.js only runs SQL):
 // - End users see only tickets they requested. Technicians and admins see every ticket in
@@ -19,11 +20,8 @@ import * as queries from './tickets.queries.js';
 // - An update can carry expectedUpdatedAt; if the ticket changed since then, it's refused
 //   with 409 so one person's edit never silently overwrites another's.
 
-const STAFF_ROLES = ['technician', 'admin'];
-
-export function isStaff(user) {
-  return STAFF_ROLES.includes(user.role);
-}
+// isStaff lives in workflow.js (no database imports) and is re-exported for the other modules.
+export { isStaff };
 
 // The visibility rule in one place. The list and detail queries apply the same rule in SQL
 // (requesterIdFilter), so a ticket an end user can't see is never even loaded.
