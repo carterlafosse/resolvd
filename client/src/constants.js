@@ -25,3 +25,15 @@ export const ROLES = {
 
 // Matches the API's STAFF_ROLES: who works the queue.
 export const STAFF_ROLES = ['technician', 'admin'];
+
+// SLA clock states from the API (sla.response, sla.resolution, sla.overall).
+export const SLA_STATES = {
+  on_track: { label: 'On track', color: 'blue' },
+  at_risk: { label: 'At risk', color: 'orange' },
+  breached: { label: 'Breached', color: 'red' },
+  met: { label: 'Met', color: 'green' },
+  none: { label: 'No SLA', color: 'gray' },
+};
+
+// Ticket statuses that still need work. Queue tabs use this as their default status filter.
+export const ACTIVE_STATUSES = ['open', 'in_progress', 'on_hold'];
